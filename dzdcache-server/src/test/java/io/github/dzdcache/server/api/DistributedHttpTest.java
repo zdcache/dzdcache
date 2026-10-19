@@ -143,7 +143,7 @@ class DistributedHttpTest {
     private static void ready(ConfigurableApplicationContext... apps) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
         while (System.nanoTime() < deadline) {
-            boolean all = true; for (var app : apps) all &= app.getBean(ClusterCoordinator.class).ready();
+            boolean all = true; for (var app : apps) all &= app.getBean(ClusterCoordinator.class).current();
             if (all) return; Thread.sleep(50);
         }
         throw new AssertionError("Cluster did not become ready");

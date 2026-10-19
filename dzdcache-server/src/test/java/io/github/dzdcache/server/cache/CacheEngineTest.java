@@ -589,6 +589,16 @@ class CacheEngineTest {
         assertThat(ids(search(cache, "name", "\"Cid\""))).containsExactly(3L);
     }
 
+    @Test void aJsonTypeWithTextAndNumberIdentitiesKeepsOrderingRootsUsedAtTheSameTime() {
+        CacheEngine cache = engine();
+        publish(cache, jsonDefinition(2));
+        cache.apply(new EntryMutation(PUT, "students", 1, mapper.valueToTree("a"), json("{\"id\":\"a\",\"name\":\"Text\"}"), 1, null), 1_000);
+        cache.apply(new EntryMutation(PUT, "students", 1, id(1), json("{\"id\":1,\"name\":\"Number\"}"), 1, null), 1_000);
+        cache.apply(new EntryMutation(PUT, "students", 1, id(2), json("{\"id\":2,\"name\":\"Newer\"}"), 1, null), 1_001);
+        assertThat(cache.entryCount("students", 1)).isEqualTo(2);
+        assertThat(cache.get("students", 1, id(2))).isNotNull();
+    }
+
     @Test void aRestoredJsonTypeCaptureReproducesTheExactState() {
         CacheEngine origin = engine();
         publish(origin, jsonDefinition(2));
