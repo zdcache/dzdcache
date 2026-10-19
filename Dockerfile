@@ -2,6 +2,7 @@ FROM eclipse-temurin:21-jdk-jammy AS build
 WORKDIR /workspace
 COPY gradlew settings.gradle.kts build.gradle.kts gradle.properties ./
 COPY gradle ./gradle
+COPY openapi.yaml ./
 COPY dzdcache-core ./dzdcache-core
 COPY dzdcache-spring-boot-starter ./dzdcache-spring-boot-starter
 COPY dzdcache-server ./dzdcache-server
