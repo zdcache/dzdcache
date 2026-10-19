@@ -53,15 +53,13 @@ spec:
       targetPort: peer
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: dzdcache
 spec:
   replicas: 3
-  strategy:
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+  serviceName: dzdcache-peers
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: dzdcache
@@ -102,7 +100,11 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: DZDCACHE_DISCOVERY_NODE_ID
-              value: $(POD_UID)
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DZDCACHE_CLUSTER_SIZE
+              value: "3"
             - name: DZDCACHE_DISCOVERY_MODE
               value: kubernetes
             - name: DZDCACHE_DISCOVERY_SERVICE_NAME

@@ -47,7 +47,6 @@ public final class ClusterCoordinator implements AutoCloseable {
         long lastAck;
         boolean inFlight;
         boolean needsSnapshot;
-        boolean removing;
         long ackedSentAt = Long.MIN_VALUE / 2;
         long sentCommit = -1;
         Progress(long nextIndex, long now) { this.nextIndex = nextIndex; this.lastAck = now; }
@@ -90,6 +89,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private volatile long commitIndex;
     private volatile long appliedIndex;
     private volatile boolean closed;
+    private volatile String startupProblem;
     private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
     private volatile long servingFrom = Long.MAX_VALUE;
     private volatile long noopIndex = Long.MAX_VALUE;
@@ -145,6 +145,8 @@ public final class ClusterCoordinator implements AutoCloseable {
     public List<Member> members() { return members; }
     public long appliedIndex() { return appliedIndex; }
     public String clusterId() { return clusterId; }
+    public String startupProblem() { return startupProblem; }
+    public int clusterSize() { return size(); }
     public void requireReady() { if (!ready()) throw new CacheException(503, "Cache is joining the cluster"); }
 
     public boolean current() {
@@ -380,27 +382,50 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (!found.available()) return;
         List<URI> peers = found.peers().values().stream().filter(uri -> !uri.equals(self.url())).toList();
         knownPeers.addAll(peers);
-        if (peers.isEmpty()) { foundCluster(); return; }
+        if (peers.isEmpty()) { foundCluster(List.of()); return; }
+        Member started = self;
+        send(self.url(), new Message.WhoLeads(), reply -> {
+            if (role != Role.STARTING || self != started) return;
+            if (reply instanceof Message.Leader leader && leader.self().equals(self)) probe(peers, started);
+            else problem("self-url " + self.url() + " does not reach this node"
+                + (reply instanceof Message.Leader other ? "; it answers as " + other.self().id() : ""));
+        }, error -> problem("self-url " + self.url() + " does not reach this node: " + error.getMessage()));
+    }
+
+    private void probe(List<URI> peers, Member started) {
         List<Message.Leader> answers = new ArrayList<>();
         int[] waiting = { peers.size() };
-        Member started = self;
+        int[] answered = { 0 };
+        String[] duplicate = { null };
         Runnable decide = () -> {
             if (--waiting[0] > 0 || role != Role.STARTING || self != started) return;
+            if (duplicate[0] != null) { problem(duplicate[0]); return; }
+            startupProblem = null;
             Optional<Member> current = answers.stream().map(Message.Leader::master).filter(Objects::nonNull).findFirst();
             if (current.isPresent()) { join(current.get()); return; }
-            boolean everyoneAnswered = answers.size() == peers.size();
+            boolean majorityAnswered = (answered[0] + 1) * 2 > size();
             boolean noCluster = answers.stream().noneMatch(Message.Leader::member);
             boolean best = answers.stream().allMatch(other -> ahead(other));
-            if (everyoneAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait()) foundCluster();
+            if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
+                foundCluster(answers.stream().map(Message.Leader::self).toList());
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
-            if (reply instanceof Message.Leader leader) {
+            if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
+            else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
+                duplicate[0] = "Another node at " + peer + " uses the node id " + self.id();
+            else if (reply instanceof Message.Leader leader) {
+                answered[0]++;
                 answers.add(leader);
                 peerLogs.put(leader.self().id(), leader);
                 peerLogsAt = timers.now();
             }
             decide.run();
         }, error -> decide.run());
+    }
+
+    private void problem(String message) {
+        if (!message.equals(startupProblem)) LOG.error("{} cannot start: {}", self.id(), message);
+        startupProblem = message;
     }
 
     private boolean ahead(Message.Leader other) {
@@ -411,15 +436,17 @@ public final class ClusterCoordinator implements AutoCloseable {
 
     private long bootstrapWait() { return properties.getElectionTimeout().toMillis() * 3; }
 
-    private void foundCluster() {
+    private void foundCluster(List<Member> answered) {
         clusterId = String.format("%013d-%s", timers.now(), UUID.randomUUID());
         installed = true;
-        members = List.of(self);
+        List<Member> founders = new ArrayList<>(List.of(self));
+        for (Member member : answered) if (founders.stream().noneMatch(known -> known.id().equals(member.id()))) founders.add(member);
+        members = List.copyOf(founders);
         term = Math.max(term, 0) + 1;
         votedFor = self.id();
         becomeMaster(timers.now());
-        appendLocal(new LogEntry.Membership(List.of(self)));
-        LOG.info("Founded a cluster as {}", self.id());
+        appendLocal(new LogEntry.Membership(members));
+        LOG.info("Founded a cluster as {} with {}", self.id(), memberIds());
     }
 
     private void join(Member current) {
@@ -429,7 +456,7 @@ public final class ClusterCoordinator implements AutoCloseable {
                 master = current;
                 lastMasterContact = timers.now();
                 electionDeadline = Long.MAX_VALUE;
-            }
+            } else if (reply instanceof Message.Refused refused && refused.status() == 409) problem(refused.message());
         }, error -> { });
     }
 
@@ -484,7 +511,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private boolean elected() {
-        return Quorum.reached(members, votes) && (members.size() != 2 || votes.size() == 2 || syncedWithMaster);
+        return Quorum.reached(size(), members, votes) && (size() != 2 || votes.size() == 2 || syncedWithMaster);
     }
 
     private long electionTimeout() {
@@ -532,7 +559,7 @@ public final class ClusterCoordinator implements AutoCloseable {
         for (long time : times) {
             Set<String> ids = new HashSet<>();
             confirmed.forEach((id, at) -> { if (at >= time) ids.add(id); });
-            if (Quorum.reached(members, ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
+            if (Quorum.reached(size(), members, ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
         }
         masterLeaseUntil = Long.MIN_VALUE / 2;
     }
@@ -617,7 +644,6 @@ public final class ClusterCoordinator implements AutoCloseable {
     private void masterTick(long now) {
         long replicationTimeout = properties.getReplicationTimeout().toMillis();
         Set<String> contacted = new HashSet<>(Set.of(self.id()));
-        long removing = progress.values().stream().filter(p -> p.removing).count();
         for (Member member : members) {
             if (member.id().equals(self.id())) continue;
             Progress p = progress.get(member.id());
@@ -626,17 +652,12 @@ public final class ClusterCoordinator implements AutoCloseable {
             if (lagging) inSync.remove(member.id());
             else if (now - p.lastAck <= replicationTimeout) inSync.add(member.id());
             if (now - p.lastAck < properties.getElectionTimeout().toMillis() * 2) contacted.add(member.id());
-            if (now - p.lastAck > properties.getMemberTimeout().toMillis() && !p.removing && members.size() - removing > 3) {
-                p.removing = true;
-                removing++;
-                changeMembership(list -> without(list, member.id()));
-            }
             replicate(member, p);
         }
         advanceCommit();
         refreshMasterLease();
         acknowledge();
-        if (!Quorum.reached(members, contacted)) {
+        if (!Quorum.reached(size(), members, contacted)) {
             LOG.warn("{} lost contact with a quorum and steps down", self.id());
             stepDown(term);
             return;
@@ -736,7 +757,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private void advanceCommit() {
-        if (role != Role.MASTER || !Quorum.reached(members, inSync)) return;
+        if (role != Role.MASTER || !Quorum.reached(size(), members, inSync)) return;
         long candidate = log.lastIndex();
         for (String id : inSync) {
             if (id.equals(self.id())) continue;
@@ -855,6 +876,9 @@ public final class ClusterCoordinator implements AutoCloseable {
         Member joining = join.member();
         Optional<Member> existing = members.stream().filter(member -> member.id().equals(joining.id())).findFirst();
         if (existing.isPresent() && existing.get().equals(joining)) return CompletableFuture.completedFuture(new Message.Ack());
+        if (existing.isEmpty() && members.size() >= size())
+            return CompletableFuture.completedFuture(new Message.Refused(409, "The cluster already has its " + size()
+                + " configured members, and " + joining.id() + " is not one of them"));
         return changeMembership(list -> {
             List<Member> next = new ArrayList<>();
             boolean replaced = false;
@@ -962,7 +986,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private boolean hasQuorumContact(long now) {
         Set<String> contacted = new HashSet<>(Set.of(self.id()));
         progress.forEach((id, p) -> { if (now - p.lastAck < properties.getElectionTimeout().toMillis()) contacted.add(id); });
-        return Quorum.reached(members, contacted);
+        return Quorum.reached(size(), members, contacted);
     }
 
     private void offerSnapshot(Member member, Progress p) {
@@ -1069,7 +1093,9 @@ public final class ClusterCoordinator implements AutoCloseable {
 
     private List<String> memberIds() { return members.stream().map(Member::id).sorted().toList(); }
 
-    private boolean pairedWith(List<String> theirs) { return members.size() == 2 && memberIds().equals(theirs); }
+    private boolean pairedWith(List<String> theirs) { return size() == 2 && memberIds().equals(theirs); }
+
+    private int size() { return properties.getClusterSize(); }
 
     private boolean isMember(String id) {
         for (Member member : members) if (member.id().equals(id)) return true;

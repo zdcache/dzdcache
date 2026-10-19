@@ -81,9 +81,29 @@ public class DzdCacheAutoConfiguration {
     @Bean @ConditionalOnMissingBean
     ClusterCoordinator dzdcacheCluster(EngineHolder engines, PeerDirectory directory, RaftTransport transport, DiscoveryProperties discovery,
                                        ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper) {
+        properties.setClusterSize(clusterSize(discovery, properties.getClusterSize()));
         Member self = new Member(discovery.getNodeId(), discovery.advertisedUrl(), System.currentTimeMillis());
         return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
             new SerialTimers(), new java.security.SecureRandom(), mapper.mapper());
+    }
+
+    static int clusterSize(DiscoveryProperties discovery, int configured) {
+        return switch (discovery.getMode()) {
+            case "standalone" -> {
+                if (configured > 1) throw new IllegalArgumentException("dzdcache.cluster-size must be 1 in standalone mode");
+                yield 1;
+            }
+            case "static" -> {
+                int listed = (int) discovery.getStaticPeers().stream().filter(peer -> !peer.equals(discovery.getSelfUrl())).distinct().count() + 1;
+                if (configured != 0 && configured != listed)
+                    throw new IllegalArgumentException("dzdcache.cluster-size is " + configured + " but static-peers lists " + listed + " nodes including this one");
+                yield listed;
+            }
+            default -> {
+                if (configured < 1) throw new IllegalArgumentException("dzdcache.cluster-size is required in kubernetes mode; set it to the number of replicas");
+                yield configured;
+            }
+        };
     }
 
     @Bean @ConditionalOnMissingBean

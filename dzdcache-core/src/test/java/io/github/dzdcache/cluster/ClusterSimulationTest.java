@@ -18,6 +18,7 @@ class ClusterSimulationTest {
         return new PutRequest("students", 1, revision, value, null, null);
     }
     private static SimulatedCluster.Node started(SimulatedCluster cluster, String... ids) {
+        cluster.configure(ids);
         SimulatedCluster.Node first = null;
         for (String id : ids) {
             SimulatedCluster.Node node = cluster.start(id);
@@ -169,6 +170,7 @@ class ClusterSimulationTest {
         SimulatedCluster cluster = new SimulatedCluster(7);
         TypeDescriptor students = cluster.students(1_000);
         cluster.properties.setLogRetentionBytes(2_000);
+        cluster.configure("a", "b", "c");
         SimulatedCluster.Node a = started(cluster, "a", "b");
         cluster.await(a.coordinator.publishAsync(students), 5_000);
         for (long id = 1; id <= 50; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N" + id, 1))), 5_000);
@@ -199,31 +201,28 @@ class ClusterSimulationTest {
         for (SimulatedCluster.Node node : cluster.live()) assertThat(held(node)).as(node.id).containsExactly(1L, 3L);
     }
 
-    @Test void aSilentMemberIsRemovedOnlyWhileAtLeastThreeMembersRemain() {
+    @Test void silentMembersKeepTheirSlotsAndOnlyTheConfiguredNodesCanJoin() {
         SimulatedCluster cluster = new SimulatedCluster(9);
         TypeDescriptor students = cluster.students(1_000);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d");
         cluster.await(a.coordinator.publishAsync(students), 5_000);
-        cluster.crash("d");
-        cluster.run(15_000);
-        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b", "c");
         cluster.crash("c");
-        cluster.run(15_000);
-        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b", "c");
-        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+        cluster.crash("d");
+        cluster.run(40_000);
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c", "d");
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000)))
+            .as("half of the configured size including the oldest").isEqualTo(200);
 
         SimulatedCluster.Node replacement = cluster.start("c");
         assertThat(cluster.runUntil(replacement.coordinator::ready, 20_000)).isTrue();
-        assertThat(a.coordinator.members()).contains(replacement.coordinator.self()).hasSize(3);
-    }
+        assertThat(a.coordinator.members()).hasSize(4).contains(replacement.coordinator.self());
+        assertThat(revisions(replacement)).containsEntry(1L, 1L);
 
-    @Test void twoMembersFallingSilentTogetherShrinkFourMembersOnlyToThree() {
-        SimulatedCluster cluster = new SimulatedCluster(9);
-        SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d");
-        cluster.crash("c");
-        cluster.crash("d");
-        cluster.run(30_000);
-        assertThat(a.coordinator.members()).hasSize(3).extracting(Member::id).contains("a", "b");
+        SimulatedCluster.Node stranger = cluster.start("e");
+        assertThat(cluster.runUntil(() -> stranger.coordinator.startupProblem() != null, 20_000)).isTrue();
+        assertThat(stranger.coordinator.startupProblem()).contains("4 configured members");
+        assertThat(stranger.coordinator.ready()).isFalse();
+        assertThat(a.coordinator.members()).extracting(Member::id).doesNotContain("e");
     }
 
     @Test void anIsolatedFollowerStopsServingWithinOneLeaseWhileTheOthersSeeEveryAcknowledgedWrite() {
@@ -275,12 +274,39 @@ class ClusterSimulationTest {
         assertThat(cluster.staleReads).isEmpty();
     }
 
+    @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
+        SimulatedCluster cluster = new SimulatedCluster(15);
+        cluster.configure("a", "b", "c");
+        cluster.selfUrls.put("c", java.net.URI.create("http://a:8080"));
+        cluster.start("a");
+        cluster.start("b");
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(() -> c.coordinator.startupProblem() != null, 10_000)).isTrue();
+        assertThat(c.coordinator.startupProblem()).contains("self-url http://a:8080 does not reach this node", "answers as a");
+        cluster.run(10_000);
+        assertThat(c.coordinator.ready()).isFalse();
+        assertThat(cluster.nodes.get("a").coordinator.members()).extracting(Member::id).doesNotContain("c");
+    }
+
+    @Test void aSecondNodeWithAnIdAlreadyInUseDoesNotStart() {
+        SimulatedCluster cluster = new SimulatedCluster(16);
+        started(cluster, "a", "b", "c");
+        cluster.nodeIds.put("copy", "b");
+        SimulatedCluster.Node copy = cluster.start("copy");
+        assertThat(cluster.runUntil(() -> copy.coordinator.startupProblem() != null, 10_000)).isTrue();
+        assertThat(copy.coordinator.startupProblem()).isEqualTo("Another node at http://b:8080 uses the node id b");
+        cluster.run(10_000);
+        assertThat(copy.coordinator.ready()).isFalse();
+        assertThat(cluster.nodes.get("b").coordinator.ready()).isTrue();
+    }
+
     @Test void aGracefulLeaveRemovesTheMemberAtOnce() {
         SimulatedCluster cluster = new SimulatedCluster(10);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c");
         SimulatedCluster.Node c = cluster.nodes.get("c");
-        assertThat(cluster.await(a.coordinator.handle(new Message.Leave(c.coordinator.self())), 5_000)).isInstanceOf(Message.Ack.class);
-        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b");
+        Member leaving = c.coordinator.self();
+        assertThat(cluster.await(a.coordinator.handle(new Message.Leave(leaving)), 5_000)).isInstanceOf(Message.Ack.class);
+        assertThat(a.coordinator.members()).doesNotContain(leaving);
         assertThat(cluster.runUntil(() -> c.coordinator.role() == ClusterCoordinator.Role.STARTING
             || c.coordinator.members().size() == 3, 5_000)).isTrue();
     }

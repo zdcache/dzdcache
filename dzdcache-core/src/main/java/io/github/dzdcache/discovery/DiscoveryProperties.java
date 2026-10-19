@@ -8,7 +8,8 @@ import java.util.UUID;
 
 public class DiscoveryProperties {
     private String mode = "standalone";
-    private String nodeId = UUID.randomUUID().toString();
+    private String nodeId;
+    private final String generatedId = UUID.randomUUID().toString();
     private URI selfUrl = URI.create("http://localhost:7070");
     private List<URI> staticPeers = List.of();
     private String namespace = "default";
@@ -21,7 +22,11 @@ public class DiscoveryProperties {
     private Duration retryDelay = Duration.ofSeconds(1);
     public URI advertisedUrl() { return podIp.isBlank() ? selfUrl : URI.create("http://" + (podIp.contains(":") ? "[" + podIp + "]" : podIp) + ":" + peerPort); }
     public String getMode() { return mode; } public void setMode(String v) { mode = v; }
-    public String getNodeId() { return nodeId; } public void setNodeId(String v) { nodeId = v; }
+    public String getNodeId() {
+        if (nodeId != null && !nodeId.isBlank()) return nodeId;
+        return mode.equals("static") ? selfUrl.getHost() + ":" + selfUrl.getPort() : generatedId;
+    }
+    public void setNodeId(String v) { nodeId = v; }
     public URI getSelfUrl() { return selfUrl; } public void setSelfUrl(URI v) { selfUrl = v; }
     public List<URI> getStaticPeers() { return staticPeers; } public void setStaticPeers(List<URI> v) { staticPeers = List.copyOf(v); }
     public String getNamespace() { return namespace; } public void setNamespace(String v) { namespace = v; }

@@ -29,6 +29,9 @@ final class SimulatedCluster {
     final List<String> staleReads = new ArrayList<>();
     int currentReads;
     boolean allowTwoMastersPerTerm;
+    boolean fixedSize;
+    final Map<String, URI> selfUrls = new HashMap<>();
+    final Map<String, String> nodeIds = new HashMap<>();
     java.util.function.Function<String, java.util.function.Consumer<CacheEngine>> registrations = id -> engine -> { };
     private final PriorityQueue<Event> events = new PriorityQueue<>();
     private final Map<String, Integer> groups = new HashMap<>();
@@ -78,7 +81,8 @@ final class SimulatedCluster {
                 return new Membership(peers, 1, true);
             };
             this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
-                new Member(id, url, now), properties, meters, timers, new SplittableRandom(random.nextLong()), mapper);
+                new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), properties, meters, timers,
+                new SplittableRandom(random.nextLong()), mapper);
         }
         CacheEngine engine() { return holder.engine(); }
     }
@@ -99,6 +103,12 @@ final class SimulatedCluster {
 
     long now() { return now; }
 
+    void configure(String... ids) {
+        for (String id : ids) if (!addresses.contains(id)) addresses.add(id);
+        properties.setClusterSize(addresses.size());
+        fixedSize = true;
+    }
+
     TypeDescriptor students(int capacity) {
         var type = new JacksonRootType<>(JacksonRootTypeTest.Student.class, Long.class, JacksonRootTypeTest.specification(), mapper);
         TypeDescriptor descriptor = type.describe("students", 1, capacity, null);
@@ -110,6 +120,7 @@ final class SimulatedCluster {
 
     Node start(String id) {
         if (!addresses.contains(id)) addresses.add(id);
+        if (!fixedSize) properties.setClusterSize(addresses.size());
         Node node = new Node(id);
         nodes.put(id, node);
         groups.putIfAbsent(id, 0);

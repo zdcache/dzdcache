@@ -7,10 +7,9 @@ import java.util.Set;
 public final class Quorum {
     private Quorum() { }
 
-    public static boolean reached(List<Member> members, Set<String> ids) {
-        int size = members.size();
+    public static boolean reached(int size, List<Member> members, Set<String> ids) {
         long present = members.stream().filter(member -> ids.contains(member.id())).count();
-        if (size == 0) return false;
+        if (size <= 0 || members.isEmpty()) return false;
         if (size <= 2) return present >= 1;
         if (present * 2 > size) return true;
         return present * 2 == size && ids.contains(oldest(members).id());

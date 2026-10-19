@@ -17,6 +17,7 @@ public class ServiceProperties {
     private Duration memberTimeout = Duration.ofSeconds(30);
     private long logRetentionBytes = 64L * 1024 * 1024;
     private int clusterPort = 7070;
+    private int clusterSize;
     private String apiToken = "";
     private String clusterToken = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
@@ -41,6 +42,7 @@ public class ServiceProperties {
         if (replicationTimeout == null || replicationTimeout.toMillis() < 1 || syncInterval == null || syncInterval.toMillis() < 1)
             throw new IllegalArgumentException("Replication timeout and sync interval must be at least one millisecond");
         if (apiToken == null || clusterToken == null) throw new IllegalArgumentException("Tokens cannot be null");
+        if (clusterSize < 0) throw new IllegalArgumentException("cluster-size cannot be negative");
     }
     public int getMaxSchemas() { return maxSchemas; } public void setMaxSchemas(int v) { maxSchemas = v; }
     public int getMaxRevisionsPerSchema() { return maxRevisionsPerSchema; } public void setMaxRevisionsPerSchema(int v) { maxRevisionsPerSchema = v; }
@@ -56,6 +58,7 @@ public class ServiceProperties {
     public Duration getMemberTimeout() { return memberTimeout; } public void setMemberTimeout(Duration v) { memberTimeout = v; }
     public long getLogRetentionBytes() { return logRetentionBytes; } public void setLogRetentionBytes(long v) { logRetentionBytes = v; }
     public int getClusterPort() { return clusterPort; } public void setClusterPort(int v) { clusterPort = v; }
+    public int getClusterSize() { return clusterSize; } public void setClusterSize(int v) { clusterSize = v; }
     public String getApiToken() { return apiToken; } public void setApiToken(String v) { apiToken = v; }
     public String getClusterToken() { return clusterToken; } public void setClusterToken(String v) { clusterToken = v; }
     public Duration getReplicationTimeout() { return replicationTimeout; } public void setReplicationTimeout(Duration v) { replicationTimeout = v; }

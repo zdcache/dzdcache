@@ -19,6 +19,18 @@ class StaticPeerDirectoryTest {
         assertThatThrownBy(() -> directory.snapshot().peers().clear()).isInstanceOf(UnsupportedOperationException.class);
     }
 
+    @Test void aStaticNodeWithoutAnExplicitIdIsNamedAfterItsSelfUrlSoItKeepsItsIdAcrossRestarts() {
+        var properties = new DiscoveryProperties();
+        properties.setMode("static");
+        properties.setSelfUrl(URI.create("http://10.0.0.5:7070"));
+        assertThat(properties.getNodeId()).isEqualTo("10.0.0.5:7070");
+        properties.setNodeId("cache-1");
+        assertThat(properties.getNodeId()).isEqualTo("cache-1");
+        var kubernetes = new DiscoveryProperties();
+        kubernetes.setMode("kubernetes");
+        assertThat(kubernetes.getNodeId()).isNotBlank().isEqualTo(kubernetes.getNodeId());
+    }
+
     @Test void standaloneIntentionallyHasNoPeers() {
         var properties = new DiscoveryProperties();
         properties.setStaticPeers(List.of(URI.create("http://peer:8080")));
