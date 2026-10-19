@@ -13,6 +13,7 @@ public final class SerialTimers implements Timers {
         Thread.ofPlatform().name("dzdcache-cluster").daemon().factory());
 
     @Override public long now() { return System.currentTimeMillis(); }
+    @Override public long elapsed() { return System.nanoTime() / 1_000_000; }
     @Override public void execute(Runnable task) { schedule(0, task); }
     @Override public void schedule(long delayMillis, Runnable task) {
         try {

@@ -503,6 +503,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private void masterTick(long now) {
         long replicationTimeout = properties.getReplicationTimeout().toMillis();
         Set<String> contacted = new HashSet<>(Set.of(self.id()));
+        long removing = progress.values().stream().filter(p -> p.removing).count();
         for (Member member : members) {
             if (member.id().equals(self.id())) continue;
             Progress p = progress.get(member.id());
@@ -511,8 +512,9 @@ public final class ClusterCoordinator implements AutoCloseable {
             if (lagging) inSync.remove(member.id());
             else if (now - p.lastAck <= replicationTimeout) inSync.add(member.id());
             if (now - p.lastAck < properties.getElectionTimeout().toMillis() * 2) contacted.add(member.id());
-            if (now - p.lastAck > properties.getMemberTimeout().toMillis() && !p.removing && members.size() > 3) {
+            if (now - p.lastAck > properties.getMemberTimeout().toMillis() && !p.removing && members.size() - removing > 3) {
                 p.removing = true;
+                removing++;
                 changeMembership(list -> without(list, member.id()));
             }
             replicate(member, p);

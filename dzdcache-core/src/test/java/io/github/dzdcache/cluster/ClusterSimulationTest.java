@@ -216,6 +216,15 @@ class ClusterSimulationTest {
         assertThat(a.coordinator.members()).contains(replacement.coordinator.self()).hasSize(3);
     }
 
+    @Test void twoMembersFallingSilentTogetherShrinkFourMembersOnlyToThree() {
+        SimulatedCluster cluster = new SimulatedCluster(9);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d");
+        cluster.crash("c");
+        cluster.crash("d");
+        cluster.run(30_000);
+        assertThat(a.coordinator.members()).hasSize(3).extracting(Member::id).contains("a", "b");
+    }
+
     @Test void aGracefulLeaveRemovesTheMemberAtOnce() {
         SimulatedCluster cluster = new SimulatedCluster(10);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c");

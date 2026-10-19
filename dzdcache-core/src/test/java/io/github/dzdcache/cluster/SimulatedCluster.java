@@ -20,6 +20,8 @@ final class SimulatedCluster {
     final JsonMapper mapper = JsonMapper.builder().build();
     final ServiceProperties properties = new ServiceProperties();
     final Random random;
+    private final Random skews;
+    double maxClockSkew = 0.04;
     final Map<String, Node> nodes = new LinkedHashMap<>();
     final Map<String, String> masters = new HashMap<>();
     final List<String> violations = new ArrayList<>();
@@ -57,10 +59,15 @@ final class SimulatedCluster {
                 register.accept(engine);
                 return engine;
             });
+            double rate = 1 + (skews.nextDouble() * 2 - 1) * maxClockSkew;
+            long created = now;
             Timers timers = new Timers() {
                 @Override public long now() { return now; }
+                @Override public long elapsed() { return created + (long) Math.floor((now - created) * rate); }
                 @Override public void execute(Runnable task) { schedule(0, task); }
-                @Override public void schedule(long delayMillis, Runnable task) { at(delayMillis, () -> { if (alive) task.run(); }); }
+                @Override public void schedule(long delayMillis, Runnable task) {
+                    at((long) Math.ceil(delayMillis / rate), () -> { if (alive) task.run(); });
+                }
             };
             PeerDirectory directory = () -> {
                 Map<String, URI> peers = new LinkedHashMap<>();
@@ -77,6 +84,7 @@ final class SimulatedCluster {
 
     SimulatedCluster(long seed) {
         random = new Random(seed);
+        skews = new Random(seed ^ 0x5DEECE66DL);
         properties.setHeartbeatInterval(Duration.ofMillis(100));
         properties.setElectionTimeout(Duration.ofMillis(1_000));
         properties.setReplicationTimeout(Duration.ofMillis(1_000));
