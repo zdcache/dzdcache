@@ -1,0 +1,13 @@
+{
+  "specification": "students",
+  "schemaVersion": 1,
+  "revision": 1,
+  "value": {
+    "id": 42,
+    "name": "Anna",
+    "sex": "female",
+    "age": 22,
+    "address": {"city": "Bergen", "country": "Norway"},
+    "courses": [{"code": "CS101", "title": "Introduction to computing"}]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "students",
+  "version": 1,
+  "identity": "/id",
+  "capacity": 10000,
+  "ttl": "infinite",
+  "dimensions": [
+    {"name": "sex", "path": "/sex", "index": "exact"},
+    {"name": "name", "path": "/name", "index": "prefix"},
+    {"name": "age", "path": "/age", "index": "range"},
+    {"name": "course", "path": "/courses/*/code", "index": "exact"}
+  ],
+  "schema": {
+    "type": "object",
+    "required": ["id", "name", "sex"],
+    "properties": {
+      "id": {"type": "integer"},
+      "name": {"type": "string"},
+      "sex": {"type": "string"},
+      "age": {"type": "integer"},
+      "address": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "country": {"type": "string"}}
+      },
+      "courses": {
+        "type": "array",
+        "items": {"type": "object", "required": ["code"], "properties": {
+          "code": {"type": "string"}, "title": {"type": "string"}
+        }}
+      }
+    }
+  }
+}

@@ -1,0 +1,8 @@
+target/
+.flattened-pom.xml
+/.mvn-cache/
+/.idea/
+*.iml
+.DS_Store
+*.log
+.env

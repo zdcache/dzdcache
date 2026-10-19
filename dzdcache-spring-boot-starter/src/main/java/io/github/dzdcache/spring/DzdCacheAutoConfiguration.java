@@ -1,0 +1,122 @@
+package io.github.dzdcache.spring;
+
+import io.github.dzdcache.cache.CacheEngine;
+import io.github.dzdcache.cache.EngineHolder;
+import io.github.dzdcache.cache.RootTypeFactory;
+import io.github.dzdcache.cache.TypeDescriptor;
+import io.github.dzdcache.cluster.*;
+import io.github.dzdcache.config.ServiceProperties;
+import io.github.dzdcache.discovery.*;
+import io.github.dzdcache.typed.JacksonRootType;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import tools.jackson.databind.ObjectMapper;
+
+@AutoConfiguration(afterName = "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration")
+@ConditionalOnProperty(prefix = "dzdcache", name = "enabled", matchIfMissing = true)
+public class DzdCacheAutoConfiguration {
+    private record Typed(CacheType<?, ?> declaration, TypeDescriptor descriptor, JacksonRootType<?, ?> type) { }
+
+    @Bean @ConditionalOnMissingBean @ConfigurationProperties("dzdcache")
+    ServiceProperties dzdcacheProperties() { return new ServiceProperties(); }
+
+    @Bean @ConditionalOnMissingBean @ConfigurationProperties("dzdcache.discovery")
+    DiscoveryProperties dzdcacheDiscoveryProperties() { return new DiscoveryProperties(); }
+
+    @Bean @ConditionalOnMissingBean
+    DzdCacheMapper dzdcacheMapper() { return DzdCacheMapper.create(); }
+
+    @Bean @ConditionalOnMissingBean
+    EngineHolder dzdcacheEngines(ServiceProperties properties, DzdCacheMapper mapper, ObjectProvider<RootTypeFactory> factories,
+                                 ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values) {
+        properties.validate();
+        List<Typed> typed = typed(declarations, values.getIfUnique(mapper::mapper));
+        RootTypeFactory factory = factories.getIfUnique();
+        return new EngineHolder(() -> {
+            CacheEngine engine = new CacheEngine(factory, mapper.mapper(), properties.getMaxSchemas(), properties.getMaxRevisionsPerSchema(),
+                properties.getMaxSearchResults(), properties.getRevisionRetention(), java.time.Clock.systemUTC());
+            for (Typed type : typed) engine.register(type.descriptor(), type.type());
+            return engine;
+        });
+    }
+
+    private static List<Typed> typed(ObjectProvider<CacheType<?, ?>> declarations, ObjectMapper values) {
+        List<Typed> typed = new ArrayList<>();
+        for (CacheType<?, ?> declaration : declarations.orderedStream().toList()) typed.add(typed(declaration, values));
+        return typed;
+    }
+
+    private static <T, ID> Typed typed(CacheType<T, ID> declaration, ObjectMapper values) {
+        var type = new JacksonRootType<>(declaration.javaClass(), declaration.identityType(), declaration.specification(), values);
+        return new Typed(declaration, type.describe(declaration.name(), declaration.version(), declaration.capacity(), declaration.ttl()), type);
+    }
+
+    @Bean(initMethod = "start") @ConditionalOnMissingBean
+    PeerDirectory dzdcachePeerDirectory(DiscoveryProperties discovery, ServiceProperties properties, DzdCacheMapper mapper) {
+        if (!discovery.getMode().equals("standalone") && properties.getClusterToken().isBlank())
+            throw new IllegalArgumentException("dzdcache.cluster-token is required in distributed mode");
+        return switch (discovery.getMode()) {
+            case "standalone", "static" -> new StaticPeerDirectory(discovery);
+            case "kubernetes" -> new KubernetesPeerDirectory(discovery, mapper.mapper());
+            default -> throw new IllegalArgumentException("Discovery mode must be standalone, static or kubernetes");
+        };
+    }
+
+    @Bean @ConditionalOnMissingBean
+    RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
+        return new HttpRaftTransport(mapper.mapper(), properties);
+    }
+
+    @Bean @ConditionalOnMissingBean
+    ClusterCoordinator dzdcacheCluster(EngineHolder engines, PeerDirectory directory, RaftTransport transport, DiscoveryProperties discovery,
+                                       ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper) {
+        Member self = new Member(discovery.getNodeId(), discovery.advertisedUrl(), System.currentTimeMillis());
+        return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
+            new SerialTimers(), new java.security.SecureRandom(), mapper.mapper());
+    }
+
+    @Bean @ConditionalOnMissingBean
+    ClusterServer dzdcacheClusterServer(ClusterCoordinator cluster, ServiceProperties properties, DzdCacheMapper mapper) {
+        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), cluster, mapper.mapper(), properties);
+    }
+
+    @Bean
+    DzdCacheLifecycle dzdcacheLifecycle(ClusterCoordinator cluster, ClusterServer server, DiscoveryProperties discovery,
+                                        ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper) {
+        List<TypeDescriptor> descriptors = typed(declarations, values.getIfUnique(mapper::mapper)).stream().map(Typed::descriptor).toList();
+        return new DzdCacheLifecycle(cluster, server, !discovery.getMode().equals("standalone"), descriptors);
+    }
+
+    @Bean @ConditionalOnMissingBean
+    DistributedCache distributedCache(ClusterCoordinator cluster, EngineHolder engines, ObjectProvider<CacheType<?, ?>> declarations,
+                                      ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper) {
+        ObjectMapper valueMapper = values.getIfUnique(mapper::mapper);
+        List<ClusterCache<?, ?>> caches = new ArrayList<>();
+        for (CacheType<?, ?> declaration : declarations.orderedStream().toList()) caches.add(cache(declaration, engines, cluster, valueMapper));
+        return new DistributedCache(cluster, caches);
+    }
+
+    private static <T, ID> ClusterCache<T, ID> cache(CacheType<T, ID> declaration, EngineHolder engines, ClusterCoordinator cluster, ObjectMapper values) {
+        return new ClusterCache<>(declaration, engines, cluster, values);
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
+    static class Health {
+        @Bean("clusterHealthIndicator") @ConditionalOnMissingBean(name = "clusterHealthIndicator")
+        DzdCacheHealthIndicator clusterHealthIndicator(ClusterCoordinator cluster, EngineHolder engines) {
+            return new DzdCacheHealthIndicator(cluster, engines);
+        }
+    }
+}

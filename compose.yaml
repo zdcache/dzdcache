@@ -1,0 +1,34 @@
+services:
+  node-a:
+    build: .
+    image: dzdcache:local
+    ports: ["127.0.0.1:8081:8080"]
+    environment:
+      DZDCACHE_DISCOVERY_MODE: static
+      DZDCACHE_DISCOVERY_NODE_ID: node-a
+      DZDCACHE_DISCOVERY_SELF_URL: http://node-a:7070
+      DZDCACHE_DISCOVERY_STATIC_PEERS: http://node-b:7070,http://node-c:7070
+      DZDCACHE_CLUSTER_TOKEN: ${DZDCACHE_CLUSTER_TOKEN:?Set DZDCACHE_CLUSTER_TOKEN}
+      DZDCACHE_API_TOKEN: ${DZDCACHE_API_TOKEN:?Set DZDCACHE_API_TOKEN}
+  node-b:
+    image: dzdcache:local
+    build: .
+    ports: ["127.0.0.1:8082:8080"]
+    environment:
+      DZDCACHE_DISCOVERY_MODE: static
+      DZDCACHE_DISCOVERY_NODE_ID: node-b
+      DZDCACHE_DISCOVERY_SELF_URL: http://node-b:7070
+      DZDCACHE_DISCOVERY_STATIC_PEERS: http://node-a:7070,http://node-c:7070
+      DZDCACHE_CLUSTER_TOKEN: ${DZDCACHE_CLUSTER_TOKEN:?Set DZDCACHE_CLUSTER_TOKEN}
+      DZDCACHE_API_TOKEN: ${DZDCACHE_API_TOKEN:?Set DZDCACHE_API_TOKEN}
+  node-c:
+    image: dzdcache:local
+    build: .
+    ports: ["127.0.0.1:8083:8080"]
+    environment:
+      DZDCACHE_DISCOVERY_MODE: static
+      DZDCACHE_DISCOVERY_NODE_ID: node-c
+      DZDCACHE_DISCOVERY_SELF_URL: http://node-c:7070
+      DZDCACHE_DISCOVERY_STATIC_PEERS: http://node-a:7070,http://node-b:7070
+      DZDCACHE_CLUSTER_TOKEN: ${DZDCACHE_CLUSTER_TOKEN:?Set DZDCACHE_CLUSTER_TOKEN}
+      DZDCACHE_API_TOKEN: ${DZDCACHE_API_TOKEN:?Set DZDCACHE_API_TOKEN}

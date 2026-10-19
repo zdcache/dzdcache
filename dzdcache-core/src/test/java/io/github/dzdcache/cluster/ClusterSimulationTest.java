@@ -1,0 +1,371 @@
+package io.github.dzdcache.cluster;
+
+import io.github.dzdcache.cache.CacheEngine;
+import io.github.dzdcache.cache.PutRequest;
+import io.github.dzdcache.cache.SnapshotRecord;
+import io.github.dzdcache.cache.TypeDescriptor;
+import io.github.dzdcache.typed.JacksonRootTypeTest;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class ClusterSimulationTest {
+    private static PutRequest put(SimulatedCluster cluster, long id, String name, long revision) {
+        JsonNode value = cluster.mapper.valueToTree(new JacksonRootTypeTest.Student(id, name, "Oslo", 20));
+        return new PutRequest("students", 1, revision, value, null, null);
+    }
+    private static SimulatedCluster.Node started(SimulatedCluster cluster, String... ids) {
+        SimulatedCluster.Node first = null;
+        for (String id : ids) {
+            SimulatedCluster.Node node = cluster.start(id);
+            if (first == null) first = node;
+            cluster.run(10);
+        }
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.ready()), 30_000))
+            .as("every node becomes ready").isTrue();
+        return first;
+    }
+    private static SimulatedCluster.Node master(SimulatedCluster cluster) {
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1, 10_000)).as("one master").isTrue();
+        return cluster.mastersNow().getFirst();
+    }
+    private static Map<Long, Long> revisions(SimulatedCluster.Node node) {
+        Map<Long, Long> found = new TreeMap<>();
+        CacheEngine.Capture capture = node.engine().capture();
+        for (int i = 0; i < capture.size(); i++) {
+            SnapshotRecord record = capture.record(i);
+            found.put(record.identity().asLong(), record.revision());
+        }
+        return found;
+    }
+    private static Set<Long> held(SimulatedCluster.Node node) {
+        Set<Long> found = new TreeSet<>();
+        CacheEngine.Capture capture = node.engine().capture();
+        for (int i = 0; i < capture.size(); i++) if (capture.record(i).held()) found.add(capture.record(i).identity().asLong());
+        return found;
+    }
+    private static void assertIdentical(SimulatedCluster cluster) {
+        List<SimulatedCluster.Node> members = cluster.live().stream().filter(node -> node.coordinator.ready()).toList();
+        assertThat(cluster.runUntil(() -> members.stream().map(node -> node.coordinator.appliedIndex()).distinct().count() == 1, 10_000))
+            .as("members apply the same log").isTrue();
+        String expected = members.getFirst().engine().fingerprint("students", 1);
+        for (SimulatedCluster.Node node : members)
+            assertThat(node.engine().fingerprint("students", 1)).as("state of " + node.id).isEqualTo(expected);
+    }
+    private static int status(List<ClusterCoordinator.Outcome> outcomes) { return outcomes.getFirst().status(); }
+
+    @Test void threeNodesElectTheOldestAndAcceptWritesThroughAnyNode() {
+        SimulatedCluster cluster = new SimulatedCluster(1);
+        TypeDescriptor students = cluster.students(100);
+        started(cluster, "a", "b", "c");
+        assertThat(master(cluster).id).isEqualTo("a");
+        SimulatedCluster.Node follower = cluster.nodes.get("c");
+        assertThat(cluster.await(follower.coordinator.publishAsync(students), 5_000)).isNotNull();
+        assertThat(status(cluster.await(follower.coordinator.putAsync(List.of(put(cluster, 1, "Ann", 1))), 5_000))).isEqualTo(200);
+        assertIdentical(cluster);
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(revisions(node)).containsEntry(1L, 1L);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aMasterCrashFailsOverWithinSecondsAndKeepsEveryAcknowledgedWrite() {
+        SimulatedCluster cluster = new SimulatedCluster(2);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 20; id++) assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N", 1))), 5_000))).isEqualTo(200);
+        long crashedAt = cluster.now();
+        cluster.crash("a");
+        SimulatedCluster.Node next = master(cluster);
+        assertThat(cluster.now() - crashedAt).as("failover time").isLessThan(4_000);
+        assertThat(next.id).isEqualTo("b");
+        assertThat(status(cluster.await(cluster.nodes.get("c").coordinator.putAsync(List.of(put(cluster, 21, "N", 1))), 5_000))).isEqualTo(200);
+        assertIdentical(cluster);
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(revisions(node)).hasSize(21);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void anUnreachableFollowerLeavesTheInSyncSetAndCatchesUpAfterwards() {
+        SimulatedCluster cluster = new SimulatedCluster(3);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        cluster.isolate("c");
+        long before = cluster.now();
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+        assertThat(cluster.now() - before).isLessThan(2_500);
+        for (long id = 2; id <= 10; id++) assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N", 1))), 5_000))).isEqualTo(200);
+        assertThat(revisions(cluster.nodes.get("c"))).isEmpty();
+        assertThat(cluster.nodes.get("c").coordinator.ready()).as("an isolated member keeps serving reads").isTrue();
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> revisions(cluster.nodes.get("c")).size() == 10, 10_000)).isTrue();
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void whenFourNodesSplitInHalfOnlyTheSideWithTheOldestKeepsAMaster() {
+        SimulatedCluster cluster = new SimulatedCluster(4);
+        TypeDescriptor students = cluster.students(1_000);
+        started(cluster, "a", "b", "c", "d");
+        cluster.await(cluster.nodes.get("a").coordinator.publishAsync(students), 5_000);
+        cluster.partition(List.of("c", "d"));
+        cluster.run(8_000);
+        assertThat(cluster.mastersNow()).extracting(node -> node.id).containsExactly("a");
+        assertThat(status(cluster.await(cluster.nodes.get("b").coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+        CompletableFuture<List<ClusterCoordinator.Outcome>> refused = cluster.nodes.get("d").coordinator.putAsync(List.of(put(cluster, 2, "N", 1)));
+        cluster.runUntil(refused::isDone, 5_000);
+        assertThat(refused).isCompletedExceptionally();
+
+        cluster.crash("a");
+        cluster.heal();
+        cluster.partition(List.of("c", "d"));
+        cluster.run(8_000);
+        assertThat(cluster.mastersNow()).as("a half without the oldest member cannot elect").isEmpty();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void withTwoNodesTheYoungerTakesOverWhenTheOlderDies() {
+        SimulatedCluster cluster = new SimulatedCluster(5);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        assertThat(master(cluster).id).isEqualTo("a");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+        cluster.run(500);
+        cluster.crash("a");
+        assertThat(master(cluster).id).isEqualTo("b");
+        assertThat(status(cluster.await(cluster.nodes.get("b").coordinator.putAsync(List.of(put(cluster, 2, "N", 1))), 5_000))).isEqualTo(200);
+        assertThat(revisions(cluster.nodes.get("b"))).containsOnlyKeys(1L, 2L);
+
+        SimulatedCluster.Node back = cluster.start("a");
+        assertThat(cluster.runUntil(back.coordinator::ready, 20_000)).isTrue();
+        assertThat(master(cluster).id).as("a restarted node rejoins as the youngest").isEqualTo("b");
+        assertThat(revisions(back)).containsOnlyKeys(1L, 2L);
+    }
+
+    @Test void withTwoNodesAfterALinkFailureTheOlderNodesHistoryWins() {
+        SimulatedCluster cluster = new SimulatedCluster(6);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.allowTwoMastersPerTerm = true;
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        cluster.run(500);
+        cluster.isolate("b");
+        cluster.run(5_000);
+        assertThat(cluster.mastersNow()).extracting(node -> node.id).containsExactlyInAnyOrder("a", "b");
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "FromA", 1))), 5_000))).isEqualTo(200);
+        assertThat(status(cluster.await(cluster.nodes.get("b").coordinator.putAsync(List.of(put(cluster, 2, "FromB", 1))), 5_000))).isEqualTo(200);
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1
+            && revisions(cluster.nodes.get("b")).keySet().equals(Set.of(1L)), 20_000)).isTrue();
+        assertThat(master(cluster).id).isEqualTo("a");
+        assertIdentical(cluster);
+    }
+
+    @Test void aJoiningNodeInstallsASnapshotWhenTheLogNoLongerReachesBack() {
+        SimulatedCluster cluster = new SimulatedCluster(7);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.properties.setLogRetentionBytes(2_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 50; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N" + id, 1))), 5_000);
+        cluster.run(500);
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(c.coordinator::ready, 20_000)).isTrue();
+        assertThat(c.meters.counter("dzdcache.snapshots.installed").count()).isEqualTo(1);
+        assertThat(revisions(c)).hasSize(50);
+        assertThat(status(cluster.await(c.coordinator.putAsync(List.of(put(cluster, 51, "N", 1))), 5_000))).isEqualTo(200);
+        assertIdentical(cluster);
+    }
+
+    @Test void getsOnAFollowerDecideEvictionOnEveryNode() {
+        SimulatedCluster cluster = new SimulatedCluster(8);
+        TypeDescriptor students = cluster.students(2);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "Ann", 1))), 5_000);
+        cluster.run(5);
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 2, "Bob", 1))), 5_000);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        cluster.runUntil(() -> revisions(c).size() == 2, 5_000);
+        cluster.run(5);
+        assertThat(c.engine().get("students", 1, cluster.mapper.valueToTree(1))).isNotNull();
+        cluster.run(1_500);
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 3, "Cid", 1))), 5_000);
+        assertIdentical(cluster);
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(held(node)).as(node.id).containsExactly(1L, 3L);
+    }
+
+    @Test void aSilentMemberIsRemovedOnlyWhileAtLeastThreeMembersRemain() {
+        SimulatedCluster cluster = new SimulatedCluster(9);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        cluster.crash("d");
+        cluster.run(15_000);
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b", "c");
+        cluster.crash("c");
+        cluster.run(15_000);
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b", "c");
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+
+        SimulatedCluster.Node replacement = cluster.start("c");
+        assertThat(cluster.runUntil(replacement.coordinator::ready, 20_000)).isTrue();
+        assertThat(a.coordinator.members()).contains(replacement.coordinator.self()).hasSize(3);
+    }
+
+    @Test void aGracefulLeaveRemovesTheMemberAtOnce() {
+        SimulatedCluster cluster = new SimulatedCluster(10);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        assertThat(cluster.await(a.coordinator.handle(new Message.Leave(c.coordinator.self())), 5_000)).isInstanceOf(Message.Ack.class);
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactly("a", "b");
+        assertThat(cluster.runUntil(() -> c.coordinator.role() == ClusterCoordinator.Role.STARTING
+            || c.coordinator.members().size() == 3, 5_000)).isTrue();
+    }
+
+    @Test void whenTwoOfThreeNodesRestartTogetherTheSurvivorLeadsThemBackWithItsData() {
+        SimulatedCluster cluster = new SimulatedCluster(11);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 10; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N", 1))), 5_000);
+        cluster.run(500);
+        cluster.crash("b");
+        cluster.crash("c");
+        cluster.start("b");
+        cluster.start("c");
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.ready()), 30_000)).isTrue();
+        assertThat(master(cluster).id).isEqualTo("a");
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(revisions(node)).as(node.id).hasSize(10);
+        assertThat(status(cluster.await(cluster.nodes.get("c").coordinator.putAsync(List.of(put(cluster, 11, "N", 1))), 5_000))).isEqualTo(200);
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void unboundedFailuresNeverGiveATermTwoMastersAndTheClusterRecovers() {
+        for (int nodes : new int[] { 3, 4, 5 }) {
+            for (long seed = 200; seed < 210; seed++) {
+                SimulatedCluster cluster = new SimulatedCluster(seed * 31 + nodes);
+                TypeDescriptor students = cluster.students(100_000);
+                String[] ids = new String[nodes];
+                for (int i = 0; i < nodes; i++) ids[i] = "n" + i;
+                started(cluster, ids);
+                cluster.await(cluster.nodes.get("n0").coordinator.publishAsync(students), 5_000);
+                Random random = new Random(seed);
+                for (int step = 0; step < 200; step++) {
+                    String target = ids[random.nextInt(nodes)];
+                    int action = random.nextInt(100);
+                    if (action < 10) { if (cluster.nodes.get(target).alive) cluster.crash(target); }
+                    else if (action < 20) cluster.isolate(target);
+                    else if (action < 30) cluster.heal();
+                    else if (action < 45) { if (!cluster.nodes.get(target).alive) cluster.start(target); }
+                    else {
+                        List<SimulatedCluster.Node> live = cluster.live();
+                        if (!live.isEmpty()) live.get(random.nextInt(live.size())).coordinator
+                            .putAsync(List.of(put(cluster, random.nextInt(50), "v", step + 1)));
+                    }
+                    cluster.run(random.nextInt(600));
+                }
+                cluster.heal();
+                for (String id : ids) if (!cluster.nodes.get(id).alive) cluster.start(id);
+                cluster.run(60_000);
+                String label = "nodes " + nodes + " seed " + seed;
+                assertThat(cluster.violations).as(label).isEmpty();
+                assertThat(cluster.mastersNow()).as(label).hasSize(1);
+                assertThat(cluster.live()).as(label).allMatch(node -> node.coordinator.ready());
+            }
+        }
+    }
+
+    @Test void javaTypesReplicateToTheNodesThatKnowThemAndAreSkippedElsewhere() {
+        SimulatedCluster cluster = new SimulatedCluster(12);
+        var type = new io.github.dzdcache.typed.JacksonRootType<>(io.github.dzdcache.typed.JacksonRootTypeTest.Student.class, Long.class,
+            io.github.dzdcache.typed.JacksonRootTypeTest.specification(), cluster.mapper);
+        TypeDescriptor descriptor = type.describe("students", 1, 2, null);
+        cluster.registrations = id -> engine -> { if (!id.equals("c")) engine.register(descriptor, type); };
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        assertThat(cluster.await(a.coordinator.publishAsync(descriptor), 5_000)).isNotNull();
+        for (long id = 1; id <= 3; id++) {
+            var student = new io.github.dzdcache.typed.JacksonRootTypeTest.Student(id, "N" + id, "Oslo", 20);
+            assertThat(status(cluster.await(cluster.nodes.get("b").coordinator.putAsync(List.of(new PutRequest("students", 1, 1,
+                cluster.mapper.valueToTree(student), null, null))), 5_000))).isEqualTo(200);
+            cluster.run(5);
+        }
+        assertThat(cluster.runUntil(() -> cluster.live().stream().map(node -> node.coordinator.appliedIndex()).distinct().count() == 1, 5_000)).isTrue();
+        assertThat(a.engine().fingerprint("students", 1)).isEqualTo(cluster.nodes.get("b").engine().fingerprint("students", 1));
+        assertThat(cluster.nodes.get("b").engine().search("students", 1, "city", new Object[] { "Oslo" }, null)).hasSize(2);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        assertThat(c.coordinator.ready()).isTrue();
+        assertThat(c.engine().unavailableTypes()).containsExactly("students/1");
+        cluster.crash("a");
+        assertThat(master(cluster).id).isEqualTo("b");
+        assertThat(status(cluster.await(c.coordinator.putAsync(List.of(new PutRequest("students", 1, 1, cluster.mapper.valueToTree(
+            new io.github.dzdcache.typed.JacksonRootTypeTest.Student(4, "N4", "Bergen", 30)), null, null))), 5_000))).isEqualTo(200);
+    }
+
+    @Test void randomFailuresWithinTheToleratedCountKeepOneMasterPerTermAndLoseNoAcknowledgedWrite() {
+        for (int nodes : new int[] { 3, 5 }) {
+            for (long seed : new long[] { 100, 101, 102, 103, 104, 105, 1040 }) {
+                SimulatedCluster cluster = new SimulatedCluster(seed * nodes);
+                TypeDescriptor students = cluster.students(100_000);
+                String[] ids = new String[nodes];
+                for (int i = 0; i < nodes; i++) ids[i] = "n" + i;
+                started(cluster, ids);
+                assertThat(cluster.await(cluster.nodes.get("n0").coordinator.publishAsync(students), 5_000)).isNotNull();
+                Random random = new Random(seed);
+                Map<Long, Long> acknowledged = new HashMap<>();
+                long[] revision = new long[50];
+                List<CompletableFuture<?>> inFlight = new ArrayList<>();
+                Set<String> isolated = new HashSet<>();
+                int tolerated = (nodes - 1) / 2;
+                for (int step = 0; step < 300; step++) {
+                    List<SimulatedCluster.Node> live = cluster.live();
+                    long newest = live.stream().mapToLong(node -> node.coordinator.appliedIndex()).max().orElse(0);
+                    Set<String> faulty = new HashSet<>(isolated);
+                    for (String id : ids) {
+                        SimulatedCluster.Node node = cluster.nodes.get(id);
+                        if (!node.alive || !node.coordinator.ready() || node.coordinator.appliedIndex() < newest - 5) faulty.add(id);
+                    }
+                    int action = random.nextInt(100);
+                    String target = ids[random.nextInt(nodes)];
+                    if (action < 8 && faulty.size() < tolerated && !faulty.contains(target)) {
+                        if (random.nextBoolean()) cluster.crash(target);
+                        else { cluster.isolate(target); isolated.add(target); }
+                    } else if (action < 14) {
+                        cluster.heal();
+                        isolated.clear();
+                    } else if (action < 18) {
+                        if (!cluster.nodes.get(target).alive) cluster.start(target);
+                    } else {
+                        long id = random.nextInt(50);
+                        long rev = ++revision[(int) id];
+                        SimulatedCluster.Node via = live.get(random.nextInt(live.size()));
+                        CompletableFuture<List<ClusterCoordinator.Outcome>> write = via.coordinator.putAsync(List.of(put(cluster, id, "v" + rev, rev)));
+                        write.thenAccept(outcomes -> {
+                            if (outcomes.getFirst().status() == 200) acknowledged.merge(id, rev, Math::max);
+                        });
+                        inFlight.add(write);
+                    }
+                    cluster.run(random.nextInt(400));
+                }
+                cluster.heal();
+                for (String id : ids) if (!cluster.nodes.get(id).alive) cluster.start(id);
+                cluster.run(30_000);
+                assertThat(cluster.violations).as("nodes " + nodes + " seed " + seed).isEmpty();
+                assertThat(cluster.mastersNow()).as("nodes " + nodes + " seed " + seed).hasSize(1);
+                assertIdentical(cluster);
+                for (SimulatedCluster.Node node : cluster.live()) {
+                    if (!node.coordinator.ready()) continue;
+                    Map<Long, Long> stored = revisions(node);
+                    String label = "nodes " + nodes + " seed " + seed + " node " + node.id;
+                    acknowledged.forEach((id, rev) -> assertThat(stored.getOrDefault(id, 0L))
+                        .as(label + " id " + id).isGreaterThanOrEqualTo(rev));
+                }
+                assertThat(acknowledged).as("some writes succeed").isNotEmpty();
+            }
+        }
+    }
+}

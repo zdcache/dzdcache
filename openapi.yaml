@@ -1,0 +1,314 @@
+openapi: 3.1.0
+info:
+  title: Distributed ZDCache
+  version: 0.1.0
+  description: |
+    Generic JSON graph cache with runtime-compiled schemas. Publishers register
+    schemas and send roots, updates and invalidations to a node through the service
+    address; DZDCache handles replication. Consumers own data-source selection and
+    fallback. DZDCache does not fetch business data from original services.
+    Searches return locally cached matching roots. HTTP 200 with [] is a successful
+    answer about current cache contents, not a cache miss. No client-code generator
+    is required. Distributed mutation failures may be partially applied: retry the same
+    revision, value and deadline. See docs/CONSISTENCY.md for protocol limitations.
+servers:
+  - url: http://localhost:8080
+security:
+  - apiBearer: []
+paths:
+  /cache/schemas:
+    post:
+      operationId: publishSchema
+      summary: Publish an immutable schema version and replicate it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SchemaDefinition'}
+      responses:
+        '201':
+          description: Published or already registered with the same definition
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SchemaView'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listSchemas
+      responses:
+        '200':
+          description: Published schema definitions
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/SchemaDefinition'}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/schemas/{id}/{version}:
+    get:
+      operationId: getSchema
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+        - name: version
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Schema and supported searches
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SchemaDefinition'}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/entries:
+    post:
+      operationId: putEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutRequest'}
+      responses:
+        '200':
+          description: Delivered to known peers; an older revision is ignored
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Mutation'}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/entries/batch:
+    post:
+      operationId: putBatch
+      description: Each root is stored independently. Check every result status; there is no batch rollback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1000
+              items: {$ref: '#/components/schemas/PutRequest'}
+      responses:
+        '200':
+          description: Individual outcomes, including failures
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [index, status]
+                  properties:
+                    index: {type: integer}
+                    status: {type: integer}
+                    mutation:
+                      anyOf:
+                        - {$ref: '#/components/schemas/Mutation'}
+                        - {type: 'null'}
+                    error: {type: [string, 'null']}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/entries/get:
+    post:
+      operationId: getEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/IdentityRequest'}
+      responses:
+        '200':
+          description: Full root graph, or only the selected fields
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '404':
+          description: Absent root (empty body), or unknown specification (problem body)
+        default: {$ref: '#/components/responses/Error'}
+  /cache/search:
+    post:
+      operationId: searchRoots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - {$ref: '#/components/schemas/SpecificationReference'}
+                - type: object
+                  required: [dimension]
+                  properties:
+                    dimension: {type: string}
+                    value:
+                      description: Required for exact or prefix indexes. For compound dimensions, an array with one value per part, except a last range part.
+                      anyOf:
+                        - $ref: '#/components/schemas/Scalar'
+                        - type: array
+                          items: {$ref: '#/components/schemas/Scalar'}
+                    from:
+                      description: Required inclusive lower endpoint for range indexes
+                      $ref: '#/components/schemas/Scalar'
+                    to:
+                      description: Required inclusive upper endpoint for range indexes
+                      $ref: '#/components/schemas/Scalar'
+                    fields: {$ref: '#/components/schemas/Fields'}
+                    limit:
+                      type: integer
+                      minimum: 1
+                      description: Return at most this many matching roots, chosen arbitrarily. Without it, more matches than dzdcache.max-search-results return 422.
+      responses:
+        '200':
+          description: Matching complete root graphs, including an authoritative empty array
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {type: object, additionalProperties: true}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/entries/invalidate:
+    post:
+      operationId: invalidateEntry
+      description: Store a tombstone at a newer owner-issued mutation revision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RemoveRequest'}
+      responses:
+        '204': {description: Invalidation delivered}
+        default: {$ref: '#/components/responses/Error'}
+  /cache/entries/evict:
+    post:
+      operationId: evictEntry
+      description: Remove only the current matching revision; use invalidate for authoritative deletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RemoveRequest'}
+      responses:
+        '204': {description: Eviction delivered}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  securitySchemes:
+    apiBearer:
+      type: http
+      scheme: bearer
+      description: Required when dzdcache.api-token is configured. Disabled by default for local standalone use.
+  responses:
+    Error:
+      description: |
+        400 invalid input; 401 invalid token; 404 unknown specification; 409 conflicting
+        schema/revision; 413 body too large; 422 search matches too many roots; 429 schema/revision limits; 503 unavailable
+        or potentially partially applied mutation. Filter errors can have a generic JSON body.
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              type: {type: string}
+              title: {type: string}
+              status: {type: integer}
+              detail: {type: string}
+              instance: {type: string}
+  schemas:
+    Scalar:
+      type: [string, number, boolean]
+    SpecificationReference:
+      type: object
+      required: [specification, schemaVersion]
+      properties:
+        specification: {type: string}
+        schemaVersion: {type: integer, minimum: 1}
+    IdentityRequest:
+      allOf:
+        - {$ref: '#/components/schemas/SpecificationReference'}
+        - type: object
+          required: [identity]
+          properties:
+            identity: {$ref: '#/components/schemas/Scalar'}
+            fields: {$ref: '#/components/schemas/Fields'}
+    Fields:
+      type: array
+      maxItems: 64
+      items: {type: string, example: /address/city}
+      description: JSON Pointers to declared properties to return, without array traversal. A selected object or array is returned whole. Omit for the full root graph.
+    RemoveRequest:
+      allOf:
+        - {$ref: '#/components/schemas/IdentityRequest'}
+        - type: object
+          properties:
+            revision: {$ref: '#/components/schemas/Revision'}
+    Revision:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Owner-issued revision. Omit it or send 0 to take the next revision in log order, so the last write wins; a retry then counts as a new write. Evict without a revision removes the current one.
+    PutRequest:
+      allOf:
+        - {$ref: '#/components/schemas/SpecificationReference'}
+        - type: object
+          required: [value]
+          properties:
+            revision: {$ref: '#/components/schemas/Revision'}
+            value: {type: object, additionalProperties: true}
+            writtenAt:
+              type: [integer, 'null']
+              format: int64
+              minimum: 0
+              description: Stable owner event time in epoch milliseconds. Required for finite TTL unless expiresAt is supplied; reuse on retries.
+            expiresAt:
+              type: [integer, 'null']
+              format: int64
+              minimum: 0
+              description: Optional absolute epoch-millisecond deadline overriding the schema TTL. Mutually exclusive with writtenAt.
+    Mutation:
+      allOf:
+        - {$ref: '#/components/schemas/RemoveRequest'}
+        - type: object
+          properties:
+            operation: {type: string, enum: [PUT, INVALIDATE, EVICT, WATERMARK]}
+            value: {type: [object, 'null'], additionalProperties: true}
+            expiresAt: {type: [integer, 'null'], format: int64}
+    SchemaDefinition:
+      type: object
+      required: [id, version, schema, identity, capacity]
+      properties:
+        id: {type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$'}
+        version: {type: integer, minimum: 1}
+        schema:
+          type: object
+          additionalProperties: true
+          description: Bounded supported JSON Schema subset; see docs/SCHEMAS.md
+        identity: {type: string, example: /id}
+        capacity: {type: integer, minimum: 1}
+        ttl: {type: string, default: infinite, example: PT5M}
+        dimensions:
+          type: array
+          maxItems: 128
+          items:
+            type: object
+            required: [name, index]
+            properties:
+              name: {type: string, maxLength: 128}
+              path: {type: string, example: '/courses/*/code', description: Required except for compound dimensions}
+              index: {type: string, enum: [exact, prefix, range, compound]}
+              parts:
+                type: array
+                minItems: 2
+                maxItems: 8
+                description: Compound only. All parts but the last are exact. Parts under the same array element match within one element.
+                items:
+                  type: object
+                  required: [path, index]
+                  properties:
+                    path: {type: string}
+                    index: {type: string, enum: [exact, prefix, range]}
+    SchemaView:
+      type: object
+      required: [id, version, fingerprint, javaClass]
+      properties:
+        id: {type: string}
+        version: {type: integer}
+        fingerprint: {type: string}
+        javaClass: {type: string}

@@ -1,0 +1,190 @@
+package io.github.dzdcache.cluster;
+
+import io.github.dzdcache.cache.CacheEngine;
+import io.github.dzdcache.cache.EngineHolder;
+import io.github.dzdcache.config.ServiceProperties;
+import io.github.dzdcache.discovery.Membership;
+import io.github.dzdcache.discovery.PeerDirectory;
+import io.github.dzdcache.cache.TypeDescriptor;
+import io.github.dzdcache.typed.JacksonRootType;
+import io.github.dzdcache.typed.JacksonRootTypeTest;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.net.URI;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
+import tools.jackson.databind.json.JsonMapper;
+
+final class SimulatedCluster {
+    final JsonMapper mapper = JsonMapper.builder().build();
+    final ServiceProperties properties = new ServiceProperties();
+    final Random random;
+    final Map<String, Node> nodes = new LinkedHashMap<>();
+    final Map<String, String> masters = new HashMap<>();
+    final List<String> violations = new ArrayList<>();
+    boolean allowTwoMastersPerTerm;
+    java.util.function.Function<String, java.util.function.Consumer<CacheEngine>> registrations = id -> engine -> { };
+    private final PriorityQueue<Event> events = new PriorityQueue<>();
+    private final Map<String, Integer> groups = new HashMap<>();
+    private long now = 1_000_000;
+    private long sequence;
+
+    private record Event(long at, long sequence, Runnable task) implements Comparable<Event> {
+        @Override public int compareTo(Event other) {
+            return at != other.at ? Long.compare(at, other.at) : Long.compare(sequence, other.sequence);
+        }
+    }
+
+    final class Node {
+        final String id;
+        final URI url;
+        final EngineHolder holder;
+        final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        final ClusterCoordinator coordinator;
+        boolean alive = true;
+        Node(String id) {
+            this.id = id;
+            this.url = URI.create("http://" + id + ":8080");
+            var register = registrations.apply(id);
+            this.holder = new EngineHolder(() -> {
+                CacheEngine engine = new CacheEngine(null, mapper, 10, 100_000, 10_000,
+                    properties.getRevisionRetention(), new java.time.Clock() {
+                        @Override public java.time.ZoneId getZone() { return java.time.ZoneOffset.UTC; }
+                        @Override public java.time.Clock withZone(java.time.ZoneId zone) { return this; }
+                        @Override public java.time.Instant instant() { return java.time.Instant.ofEpochMilli(now); }
+                    });
+                register.accept(engine);
+                return engine;
+            });
+            Timers timers = new Timers() {
+                @Override public long now() { return now; }
+                @Override public void execute(Runnable task) { schedule(0, task); }
+                @Override public void schedule(long delayMillis, Runnable task) { at(delayMillis, () -> { if (alive) task.run(); }); }
+            };
+            PeerDirectory directory = () -> {
+                Map<String, URI> peers = new LinkedHashMap<>();
+                for (String other : addresses) if (!other.equals(id)) peers.put(other, URI.create("http://" + other + ":8080"));
+                return new Membership(peers, 1, true);
+            };
+            this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
+                new Member(id, url, now), properties, meters, timers, new SplittableRandom(random.nextLong()), mapper);
+        }
+        CacheEngine engine() { return holder.engine(); }
+    }
+
+    private final List<String> addresses = new ArrayList<>();
+
+    SimulatedCluster(long seed) {
+        random = new Random(seed);
+        properties.setHeartbeatInterval(Duration.ofMillis(100));
+        properties.setElectionTimeout(Duration.ofMillis(1_000));
+        properties.setReplicationTimeout(Duration.ofMillis(1_000));
+        properties.setMemberTimeout(Duration.ofSeconds(10));
+        properties.setSyncInterval(Duration.ofSeconds(5));
+        properties.setAccessFlushInterval(Duration.ofMillis(500));
+        properties.validate();
+    }
+
+    long now() { return now; }
+
+    TypeDescriptor students(int capacity) {
+        var type = new JacksonRootType<>(JacksonRootTypeTest.Student.class, Long.class, JacksonRootTypeTest.specification(), mapper);
+        TypeDescriptor descriptor = type.describe("students", 1, capacity, null);
+        registrations = id -> engine -> engine.register(descriptor, type);
+        return descriptor;
+    }
+
+    void at(long delay, Runnable task) { events.add(new Event(now + Math.max(0, delay), sequence++, task)); }
+
+    Node start(String id) {
+        if (!addresses.contains(id)) addresses.add(id);
+        Node node = new Node(id);
+        nodes.put(id, node);
+        groups.putIfAbsent(id, 0);
+        node.coordinator.start();
+        return node;
+    }
+
+    void crash(String id) {
+        Node node = nodes.get(id);
+        node.alive = false;
+        node.coordinator.crash();
+    }
+
+    Node restart(String id) { crash(id); return start(id); }
+
+    void partition(Collection<String> side) {
+        for (String id : groups.keySet()) groups.put(id, side.contains(id) ? 1 : 0);
+    }
+
+    void isolate(String id) {
+        int next = groups.values().stream().max(Integer::compare).orElse(0) + 1;
+        groups.put(id, next);
+    }
+
+    void heal() { groups.replaceAll((id, group) -> 0); }
+
+    private boolean reachable(String from, String to) {
+        Node target = nodes.get(to);
+        return target != null && target.alive && Objects.equals(groups.get(from), groups.get(to));
+    }
+
+    private CompletableFuture<Message> deliver(Node from, URI peer, Message message) {
+        CompletableFuture<Message> reply = new CompletableFuture<>();
+        String to = peer.getHost();
+        byte[] wire = mapper.writeValueAsBytes(message);
+        long timeout = properties.getReplicationTimeout().toMillis();
+        long latency = 1 + random.nextInt(4);
+        at(latency, () -> {
+            if (!from.alive) return;
+            if (!reachable(from.id, to)) { at(timeout - latency, () -> reply.completeExceptionally(new IllegalStateException("unreachable"))); return; }
+            Node target = nodes.get(to);
+            target.coordinator.handle(mapper.readValue(wire, Message.class)).whenComplete((answer, error) -> at(1 + random.nextInt(4), () -> {
+                if (error != null) reply.completeExceptionally(error);
+                else if (!reachable(to, from.id)) reply.completeExceptionally(new IllegalStateException("reply lost"));
+                else reply.complete(mapper.readValue(mapper.writeValueAsBytes(answer), Message.class));
+            }));
+        });
+        return reply;
+    }
+
+    void run(long millis) {
+        long until = now + millis;
+        while (!events.isEmpty() && events.peek().at() <= until) step();
+        now = until;
+    }
+
+    boolean runUntil(BooleanSupplier condition, long maxMillis) {
+        long until = now + maxMillis;
+        while (!condition.getAsBoolean()) {
+            if (events.isEmpty() || events.peek().at() > until) { now = until; return condition.getAsBoolean(); }
+            step();
+        }
+        return true;
+    }
+
+    private void step() {
+        Event event = events.poll();
+        now = Math.max(now, event.at());
+        event.task().run();
+        for (Node node : nodes.values()) {
+            if (!node.alive || node.coordinator.role() != ClusterCoordinator.Role.MASTER) continue;
+            String key = node.coordinator.clusterId() + " term " + node.coordinator.term();
+            String previous = masters.putIfAbsent(key, node.id);
+            if (previous != null && !previous.equals(node.id) && !allowTwoMastersPerTerm)
+                violations.add(key + " has masters " + previous + " and " + node.id);
+        }
+    }
+
+    List<Node> live() { return nodes.values().stream().filter(node -> node.alive).toList(); }
+
+    List<Node> mastersNow() {
+        return live().stream().filter(node -> node.coordinator.role() == ClusterCoordinator.Role.MASTER).toList();
+    }
+
+    <T> T await(CompletableFuture<T> future, long maxMillis) {
+        runUntil(future::isDone, maxMillis);
+        return future.getNow(null);
+    }
+}

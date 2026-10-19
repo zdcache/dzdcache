@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: dzdcache
+server:
+  shutdown: graceful
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,cluster
+dzdcache:
+  max-schemas: 100
+  max-revisions-per-schema: 100000
+  replication-timeout: 3s
+  sync-interval: 10s
+  api-token: ${DZDCACHE_API_TOKEN:}
+  cluster-token: ${DZDCACHE_CLUSTER_TOKEN:}
+  discovery:
+    mode: ${DZDCACHE_DISCOVERY_MODE:standalone}

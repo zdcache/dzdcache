@@ -1,0 +1,7 @@
+.git
+**/.mvn-cache
+**/target
+.idea
+.env
+experiments
+*.log

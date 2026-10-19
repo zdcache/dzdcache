@@ -1,0 +1,74 @@
+package io.github.dzdcache.spring;
+
+import io.github.dzdcache.cache.CacheException;
+import io.github.dzdcache.cache.EngineHolder;
+import io.github.dzdcache.cache.EntryMutation;
+import io.github.dzdcache.cache.PutRequest;
+import io.github.dzdcache.cluster.ClusterCoordinator;
+import io.github.zdcache.Getter;
+import io.github.zdcache.internal.Getters;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import tools.jackson.databind.ObjectMapper;
+
+public final class ClusterCache<T, ID> {
+    private final CacheType<T, ID> type;
+    private final EngineHolder engines;
+    private final ClusterCoordinator cluster;
+    private final ObjectMapper values;
+
+    ClusterCache(CacheType<T, ID> type, EngineHolder engines, ClusterCoordinator cluster, ObjectMapper values) {
+        this.type = type; this.engines = engines; this.cluster = cluster; this.values = values;
+    }
+
+    public CacheType<T, ID> type() { return type; }
+
+    public T get(ID id) {
+        cluster.requireReady();
+        return type.javaClass().cast(engines.engine().find(type.name(), type.version(), id));
+    }
+
+    public List<T> search(String dimension, Object... query) { return search(null, dimension, query); }
+
+    public List<T> search(Getter<T, ?> dimension, Object... query) { return search(null, Getters.name(dimension), query); }
+
+    public List<T> search(Integer limit, String dimension, Object... query) {
+        cluster.requireReady();
+        return engines.engine().search(type.name(), type.version(), dimension, query, limit).stream().map(type.javaClass()::cast).toList();
+    }
+
+    public long put(T value) { return put(value, 0); }
+
+    public long put(T value, long revision) { return revisionOf(cluster.put(List.of(request(value, revision))).getFirst()); }
+
+    public CompletableFuture<Long> putAsync(T value) { return putAsync(value, 0); }
+
+    public CompletableFuture<Long> putAsync(T value, long revision) {
+        return cluster.putAsync(List.of(request(value, revision))).thenApply(outcomes -> revisionOf(outcomes.getFirst()));
+    }
+
+    public List<ClusterCoordinator.Outcome> putAll(Collection<? extends T> entries) {
+        return cluster.put(entries.stream().map(value -> request(value, 0)).toList());
+    }
+
+    public long invalidate(ID id) { return invalidate(id, 0); }
+
+    public long invalidate(ID id, long revision) { return change(EntryMutation.Operation.INVALIDATE, id, revision); }
+
+    public void evict(ID id) { change(EntryMutation.Operation.EVICT, id, 0); }
+
+    private long change(EntryMutation.Operation operation, ID id, long revision) {
+        return revisionOf(cluster.change(new EntryMutation(operation, type.name(), type.version(), values.valueToTree(id), null, revision, null)));
+    }
+
+    private PutRequest request(T value, long revision) {
+        Long writtenAt = type.ttl() == null ? null : System.currentTimeMillis();
+        return new PutRequest(type.name(), type.version(), revision, values.valueToTree(value), writtenAt, null);
+    }
+
+    private static long revisionOf(ClusterCoordinator.Outcome outcome) {
+        if (outcome.status() != 200) throw new CacheException(outcome.status(), outcome.error());
+        return outcome.mutation() == null ? 0 : outcome.mutation().revision();
+    }
+}
