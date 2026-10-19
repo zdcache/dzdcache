@@ -30,7 +30,7 @@ Dependencies: zdcache, Jackson 3 databind, Micrometer core and SLF4J.
 
 An embedding builds a `CacheEngine` inside an `EngineHolder`, registers its local types, then creates a `PeerDirectory`, an `HttpRaftTransport`, a `ClusterCoordinator` and a `ClusterServer`, starts the directory, the server and the coordinator, and publishes its type descriptors once the coordinator is ready. `DzdCacheAutoConfiguration` and `DzdCacheLifecycle` in the starter do exactly this and are the reference. A type whose descriptor arrives through the log without a local registration is created by the engine's `RootTypeFactory`, or recorded as unavailable when there is none.
 
-The rules the coordinator follows — master election, acknowledgment by the in-sync members, quorum with the oldest member as tie-break, two-node takeover, membership changes — are in [consistency and failure behavior](../docs/CONSISTENCY.md).
+The rules the coordinator follows — master election, read leases, acknowledgment after every lease holder has applied a write, quorum against the configured size with the oldest member as tie-break, the two-node rules, membership changes — are in [consistency and failure behavior](../docs/CONSISTENCY.md).
 
 ## Tests
 

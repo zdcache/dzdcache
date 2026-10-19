@@ -49,10 +49,10 @@ List<Student> young = students.search("age", ValueRange.between(18, 25));
 students.invalidate(1L);
 ```
 
-- `put`, `putAll`, `invalidate` and `evict` return once the master and every in-sync instance have the change. `putAsync` returns a `CompletableFuture`.
+- `put`, `putAll`, `invalidate` and `evict` return once the change has committed and every instance that may serve reads has applied it, so a read on any instance sees it. `putAsync` returns a `CompletableFuture`.
 - Without a revision, a write gets the next revision for its identity and the last write wins. Pass an explicit revision to `put(value, revision)` or `invalidate(id, revision)` when the data owner orders its changes; older revisions are then ignored.
 - `get` and `search` read the local replica. A `get` counts as use for the LRU on every instance; a search does not.
-- Reads and writes throw `CacheException` while the instance has not joined the cluster. `DistributedCache.ready()` reports whether it has.
+- Reads throw `CacheException` (503) while the instance cannot confirm it has every acknowledged write: while it joins, after it loses contact with the master, and during a failover. Writes throw it when no master can be reached. `DistributedCache.current()` reports whether reads can be served, and `ready()` whether the instance is a member.
 
 Values are converted with the service's `ObjectMapper` when there is exactly one; cluster messages use a private mapper.
 
@@ -62,7 +62,8 @@ Values are converted with the service's `ObjectMapper` when there is exactly one
 | --- | --- |
 | `dzdcache.enabled` | `true` |
 | `dzdcache.discovery.mode` | `standalone`; also `static` or `kubernetes` |
-| `dzdcache.discovery.node-id` | random UUID |
+| `dzdcache.cluster-size` | static: the configured nodes; Kubernetes: required, equal to the replica count |
+| `dzdcache.discovery.node-id` | static: the self-url's host:port; otherwise a random UUID |
 | `dzdcache.discovery.self-url` | `http://localhost:7070`, the URL other instances use for this one |
 | `dzdcache.discovery.static-peers` | empty |
 | `dzdcache.discovery.namespace`, `dzdcache.discovery.service-name` | `default`, `dzdcache-peers` |
@@ -82,7 +83,7 @@ dzdcache:
       - http://10.0.0.13:7070
 ```
 
-In `kubernetes` mode a starting instance lists the EndpointSlices of a headless peer Service with `publishNotReadyAddresses: true`, and needs a Role that permits EndpointSlice list; see [the server's manifest](../k8s/dzdcache.yaml) for an example. After joining, the Kubernetes API is not used.
+In `kubernetes` mode a starting instance lists the EndpointSlices of a headless peer Service with `publishNotReadyAddresses: true`, and needs a Role that permits EndpointSlice list; see [the server's manifest](../k8s/dzdcache.yaml) for an example. Run the instances as a StatefulSet with the pod name as `dzdcache.discovery.node-id`, so a restarted pod keeps its id. After joining, the Kubernetes API is not used.
 
 ## Rolling upgrades
 
@@ -90,7 +91,7 @@ Every instance publishes its declared types when it starts. A type's fingerprint
 
 ## Health and metrics
 
-With Actuator present, a `clusterHealthIndicator` reports the role, master, members and unavailable types. To gate readiness on joining:
+With Actuator present, a `clusterHealthIndicator` reports the role, master, members, whether the instance is current, unavailable types and any startup problem, such as a self-url that reaches another node. To gate readiness on fresh reads:
 
 ```yaml
 management.endpoint.health.group.readiness.include: readinessState,cluster

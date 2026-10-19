@@ -5,6 +5,7 @@ const BASE = __ENV.BASE_URL || 'http://localhost:8080';
 const SIZE = Number(__ENV.SIZE || 10000);
 const CAPACITY = Number(__ENV.CAPACITY || SIZE);
 const DURATION = __ENV.DURATION || '60s';
+const READERS = (__ENV.READ_URLS || '').split(',').filter(Boolean);
 const HEADERS = { 'Content-Type': 'application/json',
   ...(__ENV.TOKEN ? { Authorization: `Bearer ${__ENV.TOKEN}` } : {}) };
 const SPEC = { specification: 'loadtest-students', schemaVersion: 1 };
@@ -16,7 +17,8 @@ export const options = {
     writer: { executor: 'constant-arrival-rate', rate: Number(__ENV.WRITES_PER_SECOND || 10), timeUnit: '1s',
       duration: DURATION, preAllocatedVUs: 1, exec: 'write' },
   },
-  thresholds: { checks: ['rate>0.99'] },
+  thresholds: { checks: ['rate>0.99'], 'http_req_duration{scenario:writer}': ['p(95)<1000'],
+    'http_req_duration{scenario:searchers}': ['p(95)<100'] },
 };
 
 function root(id, name) {
@@ -25,7 +27,7 @@ function root(id, name) {
     courses: [{ code: `CS${id % 50}`, title: 'Introduction to computing', year: 2020 + id % 6 }] };
 }
 
-function post(path, body) { return http.post(`${BASE}${path}`, JSON.stringify(body), { headers: HEADERS }); }
+function post(path, body, base = BASE) { return http.post(`${base}${path}`, JSON.stringify(body), { headers: HEADERS }); }
 
 export function setup() {
   const schema = post('/cache/schemas', {
@@ -68,5 +70,13 @@ let written = 0;
 export function write() {
   const id = Math.floor(Math.random() * SIZE);
   const revision = Date.now() * 1000 + (written++ % 1000);
-  check(post('/cache/entries', { ...SPEC, revision, value: root(id, `Renamed${id}`) }), { 'write acknowledged': r => r.status === 200 });
+  const name = `Renamed${id}-${revision}`;
+  const stored = post('/cache/entries', { ...SPEC, revision, value: root(id, name) });
+  check(stored, { 'write acknowledged': r => r.status === 200 });
+  if (stored.status !== 200) return;
+  for (const reader of READERS) {
+    check(post('/cache/entries/get', { ...SPEC, identity: id }, reader), {
+      'acknowledged write visible on every node': r => r.status === 503 || (r.status === 200 && r.json().name === name),
+    });
+  }
 }

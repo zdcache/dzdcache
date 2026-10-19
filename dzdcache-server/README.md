@@ -10,11 +10,11 @@ Commands in this file run from the repository root.
 - ZDCache identity, exact, prefix, range, and nested-collection indexes; full root graph serialization.
 - Single-root and batch writes, identity lookup, search, invalidation, and explicit eviction.
 - Infinite or finite TTL, local LRU eviction, per-root revisions, conflict detection, and deletion tombstones.
-- Replication through one elected master: a replicated log, acknowledgment by every in-sync member, catch-up from the log or a snapshot, and voted failover.
+- Replication through one elected master: a replicated log, read leases, acknowledgment once every node that may serve reads has applied a write, catch-up from the log or a snapshot, and voted failover.
 - Standalone, configured-peer, and Kubernetes EndpointSlice discovery while a node starts.
 - Separate API/peer bearer tokens, payload limits, readiness/liveness probes, Docker and Kubernetes configuration.
 
-This is an initial implementation. Its distribution protocol provides one order of changes and acknowledgment by every in-sync member. **It does not guarantee strict freshness across network partitions or concurrent membership changes.** See [consistency and failure behavior](../docs/CONSISTENCY.md) before connecting owner updates.
+This is an initial implementation. Its distribution protocol provides one order of changes, and a read on any node returns every write acknowledged before it started, or 503. **The exception is a two-node cluster whose link fails while both nodes stay up.** See [consistency and failure behavior](../docs/CONSISTENCY.md) before connecting owner updates.
 
 ## Responsibilities
 
@@ -45,7 +45,7 @@ The default is one standalone node on port 8080. The API is unauthenticated in t
 
 The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.github.zdcache:zdcache:0.3.1`.
 
-Run `bash scripts/smoke-test.sh` after packaging to exercise **the executable JAR**, including runtime compilation. `scripts/benchmark.sh` runs the in-process JMH benchmarks and passes its arguments to JMH; `scripts/load/search-with-writes.js` is a k6 load test of three users searching and getting by identity and one writer against a running node or cluster, configured with `BASE_URL`, `TOKEN`, `SIZE`, `CAPACITY` and `DURATION`. Tests also start two real HTTP nodes and a simulated Kubernetes API. They do not need Docker or a Kubernetes cluster.
+Run `bash scripts/smoke-test.sh` after packaging to exercise **the executable JAR**, including runtime compilation. `scripts/benchmark.sh` runs the in-process JMH benchmarks and passes its arguments to JMH; `scripts/load/search-with-writes.js` is a k6 load test of three users searching and getting by identity and one writer against a running node or cluster, configured with `BASE_URL`, `TOKEN`, `SIZE`, `CAPACITY` and `DURATION`; with `READ_URLS`, a comma-separated list of other nodes, the writer also reads each acknowledged write back from them and checks that it is visible at once. Tests also start two real HTTP nodes and a simulated Kubernetes API. They do not need Docker or a Kubernetes cluster.
 
 ## Try a schema and object graph
 
@@ -110,13 +110,13 @@ All entry and query paths are generic. The specification and version travel in t
 | `POST /cache/schemas` | Publish and replicate a schema; 201, including idempotent republication. |
 | `GET /cache/schemas` | List published definitions. |
 | `GET /cache/schemas/{id}/{version}` | Inspect a definition and its search dimensions. |
-| `POST /cache/entries` | Put a root; 200 once the master and every in-sync member have it. |
+| `POST /cache/entries` | Put a root; 200 once it has committed and every node that may serve reads has applied it. |
 | `POST /cache/entries/batch` | Array of per-root outcomes; 200 for the batch envelope. |
 | `POST /cache/entries/get` | Root JSON, or 404 for an absent root. `fields` works as for search. |
 | `POST /cache/search` | Matching root graphs; 200 even when empty. An optional `limit` caps the count, and `fields` selects JSON Pointers to return instead of whole graphs. |
 | `POST /cache/entries/invalidate` | Newer revision tombstone; 204. |
 | `POST /cache/entries/evict` | Remove a matching revision on every member; 204. |
-| `GET /actuator/health/readiness` | 200 when this node is ready; 503 while joining. |
+| `GET /actuator/health/readiness` | 200 when this node can serve fresh reads; 503 while joining or without a read lease. |
 | `GET /actuator/health/liveness` | Process health, independent of peer reachability. |
 | `GET /actuator/prometheus` | Metrics: search and get timers, search result sizes, mutation, election, snapshot and replication-failure counts, readiness, master, term, members, applied log index, cached roots and revision records per schema. |
 
@@ -132,7 +132,7 @@ export DZDCACHE_CLUSTER_TOKEN="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-Nodes listen on host ports 8081, 8082 and 8083. Publish/write through any of them and read through another using the API token. Readiness becomes healthy once a node has joined the cluster. Stopping one node leaves the other two to elect a master if needed and keep accepting writes.
+Nodes listen on host ports 8081, 8082 and 8083. Publish/write through any of them and read through another using the API token. Readiness becomes healthy once a node has joined the cluster and holds a read lease. Stopping one node leaves the other two to elect a master if needed and keep accepting writes.
 
 ## Kubernetes
 
@@ -149,7 +149,7 @@ Apply the Secret and manifests to the same namespace. The namespaced Role permit
 
 - **`dzdcache:8080`** routes clients to ready pods.
 - **`dzdcache-peers`** is a separate headless Service with `publishNotReadyAddresses: true`. Joining nodes must be reachable for replication before becoming client-ready; readiness-filtered peers would create a bootstrap cycle.
-- Pod UID identifies a node; downward-API pod IP/UID allow self-exclusion.
+- The pods form a StatefulSet. Each pod's name is its node id, so a restarted pod takes back its slot, and `DZDCACHE_CLUSTER_SIZE` must equal `replicas`. The downward-API pod IP and UID allow self-exclusion.
 - Probes separate cluster failure from process failure. Pods use a full JDK, run as non-root, and have a read-only filesystem with writable `/tmp`.
 
 The manifest does not install TLS or namespace authorization. Bearer tokens assume a trusted private network; use network policies and TLS/mTLS through your platform when needed. The shared API token grants all cache operations; there are no per-tenant ACLs. Building this project does not deploy it.
@@ -169,8 +169,11 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.replication-timeout` | 3 seconds |
 | `dzdcache.sync-interval` | 10 seconds |
 | `dzdcache.cluster-port` | 7070 |
+| `dzdcache.cluster-size` | static: the peer list plus this node; Kubernetes: required, equal to `replicas` |
 | `dzdcache.heartbeat-interval` | 200 milliseconds |
 | `dzdcache.election-timeout` | 1 second |
+| `dzdcache.read-lease` | 500 milliseconds |
+| `dzdcache.two-node-takeover` | 3 seconds |
 | `dzdcache.member-timeout` | 30 seconds |
 | `dzdcache.log-retention-bytes` | 64 MiB |
 
