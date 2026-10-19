@@ -13,6 +13,7 @@ public class ServiceProperties {
     private Duration accessFlushInterval = Duration.ofSeconds(1);
     private Duration heartbeatInterval = Duration.ofMillis(200);
     private Duration electionTimeout = Duration.ofSeconds(1);
+    private Duration readLease = Duration.ofMillis(500);
     private Duration memberTimeout = Duration.ofSeconds(30);
     private long logRetentionBytes = 64L * 1024 * 1024;
     private int clusterPort = 7070;
@@ -28,6 +29,8 @@ public class ServiceProperties {
                 || heartbeatInterval.toMillis() < 1 || electionTimeout.compareTo(heartbeatInterval.multipliedBy(2)) < 0
                 || memberTimeout.compareTo(electionTimeout) <= 0 || logRetentionBytes < 0)
             throw new IllegalArgumentException("heartbeat-interval must be positive, election-timeout at least twice it, member-timeout above election-timeout");
+        if (readLease == null || readLease.compareTo(heartbeatInterval.multipliedBy(2)) < 0 || readLease.compareTo(electionTimeout) > 0)
+            throw new IllegalArgumentException("read-lease must be at least twice heartbeat-interval and at most election-timeout");
         if (accessFlushInterval == null || accessFlushInterval.toMillis() < 1)
             throw new IllegalArgumentException("access-flush-interval must be at least one millisecond");
         if (revisionRetention == null || revisionRetention.toMillis() < 1)
@@ -49,6 +52,7 @@ public class ServiceProperties {
     public Duration getAccessFlushInterval() { return accessFlushInterval; } public void setAccessFlushInterval(Duration v) { accessFlushInterval = v; }
     public Duration getHeartbeatInterval() { return heartbeatInterval; } public void setHeartbeatInterval(Duration v) { heartbeatInterval = v; }
     public Duration getElectionTimeout() { return electionTimeout; } public void setElectionTimeout(Duration v) { electionTimeout = v; }
+    public Duration getReadLease() { return readLease; } public void setReadLease(Duration v) { readLease = v; }
     public Duration getMemberTimeout() { return memberTimeout; } public void setMemberTimeout(Duration v) { memberTimeout = v; }
     public long getLogRetentionBytes() { return logRetentionBytes; } public void setLogRetentionBytes(long v) { logRetentionBytes = v; }
     public int getClusterPort() { return clusterPort; } public void setClusterPort(int v) { clusterPort = v; }

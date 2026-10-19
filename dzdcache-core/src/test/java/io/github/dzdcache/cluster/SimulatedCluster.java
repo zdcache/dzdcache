@@ -25,6 +25,9 @@ final class SimulatedCluster {
     final Map<String, Node> nodes = new LinkedHashMap<>();
     final Map<String, String> masters = new HashMap<>();
     final List<String> violations = new ArrayList<>();
+    final Map<String, Long> acknowledged = new HashMap<>();
+    final List<String> staleReads = new ArrayList<>();
+    int currentReads;
     boolean allowTwoMastersPerTerm;
     java.util.function.Function<String, java.util.function.Consumer<CacheEngine>> registrations = id -> engine -> { };
     private final PriorityQueue<Event> events = new PriorityQueue<>();
@@ -183,6 +186,21 @@ final class SimulatedCluster {
             if (previous != null && !previous.equals(node.id) && !allowTwoMastersPerTerm)
                 violations.add(key + " has masters " + previous + " and " + node.id);
         }
+    }
+
+    void acknowledge(Node via, long id, long revision) {
+        acknowledged.merge(via.coordinator.clusterId() + "/" + id, revision, Math::max);
+        for (Node node : live()) read(node, id);
+    }
+
+    Long read(Node node, long id) {
+        if (!node.alive || !node.coordinator.current()) return null;
+        currentReads++;
+        Object root = node.engine().contains("students", 1) ? node.engine().find("students", 1, id) : null;
+        long seen = root == null ? 0 : ((JacksonRootTypeTest.Student) root).age();
+        long expected = acknowledged.getOrDefault(node.coordinator.clusterId() + "/" + id, 0L);
+        if (seen < expected) staleReads.add("at " + now + " " + node.id + " read revision " + seen + " of " + id + " after " + expected + " was acknowledged");
+        return seen;
     }
 
     List<Node> live() { return nodes.values().stream().filter(node -> node.alive).toList(); }

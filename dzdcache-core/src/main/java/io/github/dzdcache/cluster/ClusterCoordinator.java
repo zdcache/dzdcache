@@ -48,7 +48,15 @@ public final class ClusterCoordinator implements AutoCloseable {
         boolean inFlight;
         boolean needsSnapshot;
         boolean removing;
+        long ackedSentAt = Long.MIN_VALUE / 2;
+        long sentCommit = -1;
         Progress(long nextIndex, long now) { this.nextIndex = nextIndex; this.lastAck = now; }
+    }
+    private static final class Holder {
+        final long startedAt;
+        long until = Long.MIN_VALUE / 2;
+        long applied;
+        Holder(long startedAt) { this.startedAt = startedAt; }
     }
 
     private final EngineHolder holder;
@@ -63,6 +71,8 @@ public final class ClusterCoordinator implements AutoCloseable {
     private final Map<String, Progress> progress = new HashMap<>();
     private final Set<String> inSync = new HashSet<>();
     private final Map<Long, CompletableFuture<Result>> pending = new HashMap<>();
+    private final Map<Long, Result> results = new HashMap<>();
+    private final Map<String, Holder> leases = new HashMap<>();
     private final List<Access> reported = new ArrayList<>();
     private final ArrayDeque<Change> changes = new ArrayDeque<>();
     private final Set<URI> knownPeers = new LinkedHashSet<>();
@@ -80,6 +90,13 @@ public final class ClusterCoordinator implements AutoCloseable {
     private volatile long commitIndex;
     private volatile long appliedIndex;
     private volatile boolean closed;
+    private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
+    private volatile long servingFrom = Long.MAX_VALUE;
+    private volatile long noopIndex = Long.MAX_VALUE;
+    private volatile long ackedIndex;
+    private volatile long leaseUntil = Long.MIN_VALUE / 2;
+    private volatile long leaseIndex = Long.MAX_VALUE;
+    private boolean leaseInFlight;
     private String votedFor;
     private Set<String> votes = new HashSet<>();
     private long lastMasterContact = Long.MIN_VALUE / 2;
@@ -130,6 +147,18 @@ public final class ClusterCoordinator implements AutoCloseable {
     public String clusterId() { return clusterId; }
     public void requireReady() { if (!ready()) throw new CacheException(503, "Cache is joining the cluster"); }
 
+    public boolean current() {
+        if (!ready()) return false;
+        long now = timers.elapsed();
+        if (role == Role.MASTER) return now >= servingFrom && now < masterLeaseUntil && appliedIndex >= noopIndex;
+        return now < leaseUntil && appliedIndex >= leaseIndex;
+    }
+
+    public void requireCurrent() {
+        requireReady();
+        if (!current()) throw new CacheException(503, "This node cannot confirm that it has every acknowledged write");
+    }
+
     public SchemaView publish(TypeDescriptor schema) { return await(publishAsync(schema)); }
     public List<Outcome> put(List<PutRequest> puts) { return await(putAsync(puts)); }
     public Outcome change(EntryMutation mutation) { return await(changeAsync(mutation)); }
@@ -162,6 +191,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             case Message.ForwardPublish request -> forwarded(request);
             case Message.ForwardPuts request -> forwarded(request);
             case Message.ForwardChange request -> forwarded(request);
+            case Message.LeaseRequest request -> CompletableFuture.completedFuture(onLeaseRequest(request));
             case Message.AccessReport report -> {
                 if (role != Role.MASTER) yield CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
                 reported.addAll(report.accesses());
@@ -310,8 +340,10 @@ public final class ClusterCoordinator implements AutoCloseable {
         CompletableFuture<Result> future = new CompletableFuture<>();
         pending.put(entry.index(), future);
         timers.schedule(properties.getReplicationTimeout().toMillis() * 2, () -> {
-            if (pending.remove(entry.index(), future))
+            if (pending.remove(entry.index(), future)) {
+                results.remove(entry.index());
                 future.completeExceptionally(new CacheException(503, "Write may be partially applied; retry the same revision and payload"));
+            }
         });
         advanceCommit();
         replicateAll();
@@ -330,6 +362,7 @@ public final class ClusterCoordinator implements AutoCloseable {
                     nextDiscovery = now + DISCOVERY_RETRY * 2;
                     join(master);
                 }
+                if (role == Role.FOLLOWER && installed && master != null && members.contains(self) && !leaseInFlight) renewLease();
                 if (installed && members.contains(self) && now >= electionDeadline) startElection(now);
                 else if (!members.contains(self) && install == null && now - lastMasterContact > properties.getMemberTimeout().toMillis())
                     restartMembership(now);
@@ -415,6 +448,8 @@ public final class ClusterCoordinator implements AutoCloseable {
         resyncRequired = false;
         install = null;
         syncedWithMaster = false;
+        leaseUntil = Long.MIN_VALUE / 2;
+        leaseIndex = Long.MAX_VALUE;
         failPending();
         nextDiscovery = now;
         LOG.info("No longer a member; rejoining as {}", self);
@@ -460,6 +495,12 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private void becomeMaster(long now) {
+        servingFrom = timers.elapsed() + leaseWait(properties.getReadLease().toMillis());
+        noopIndex = log.lastIndex() + 1;
+        masterLeaseUntil = Long.MIN_VALUE / 2;
+        leaseUntil = Long.MIN_VALUE / 2;
+        leases.clear();
+        ackedIndex = 0;
         role = Role.MASTER;
         syncedWithMaster = true;
         master = self;
@@ -476,6 +517,77 @@ public final class ClusterCoordinator implements AutoCloseable {
         }
         LOG.info("{} is master for term {}", self.id(), term);
         appendLocal(new LogEntry.Noop());
+        refreshMasterLease();
+    }
+
+    private static long leaseWait(long millis) { return millis + millis / 8; }
+
+    private void refreshMasterLease() {
+        if (role != Role.MASTER) return;
+        long now = timers.elapsed();
+        Map<String, Long> confirmed = new HashMap<>();
+        confirmed.put(self.id(), now);
+        progress.forEach((id, p) -> confirmed.put(id, p.ackedSentAt));
+        List<Long> times = confirmed.values().stream().distinct().sorted(Comparator.reverseOrder()).toList();
+        for (long time : times) {
+            Set<String> ids = new HashSet<>();
+            confirmed.forEach((id, at) -> { if (at >= time) ids.add(id); });
+            if (Quorum.reached(members, ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
+        }
+        masterLeaseUntil = Long.MIN_VALUE / 2;
+    }
+
+    private void renewLease() {
+        Member current = master;
+        long sentAt = timers.elapsed();
+        long sentTerm = term;
+        Member asked = self;
+        leaseInFlight = true;
+        send(current.url(), new Message.LeaseRequest(term, self, appliedIndex), reply -> {
+            leaseInFlight = false;
+            if (!(reply instanceof Message.Lease lease) || lease.millis() <= 0 || lease.term() != sentTerm || term != sentTerm || self != asked) return;
+            leaseIndex = lease.ackedIndex();
+            leaseUntil = Math.max(leaseUntil, sentAt + lease.millis());
+        }, error -> leaseInFlight = false);
+    }
+
+    private Message onLeaseRequest(Message.LeaseRequest request) {
+        long now = timers.elapsed();
+        Member member = request.member();
+        boolean granted = role == Role.MASTER && request.term() == term && members.contains(member) && inSync.contains(member.id())
+            && now >= servingFrom && now < masterLeaseUntil && ackedIndex >= noopIndex;
+        if (!granted) return new Message.Lease(term, 0, 0);
+        long millis = Math.min(properties.getReadLease().toMillis(), masterLeaseUntil - now);
+        Holder holder = leases.get(member.id());
+        if (holder == null || holder.startedAt != member.startedAt()) {
+            holder = new Holder(member.startedAt());
+            leases.put(member.id(), holder);
+        }
+        holder.until = Math.max(holder.until, now + leaseWait(millis));
+        holder.applied = Math.max(holder.applied, request.appliedIndex());
+        acknowledge();
+        return new Message.Lease(term, millis, ackedIndex);
+    }
+
+    private void acknowledge() {
+        if (role != Role.MASTER) return;
+        long now = timers.elapsed();
+        if (now < servingFrom) return;
+        long limit = appliedIndex;
+        for (Iterator<Holder> it = leases.values().iterator(); it.hasNext(); ) {
+            Holder holder = it.next();
+            if (holder.until <= now) it.remove();
+            else limit = Math.min(limit, holder.applied);
+        }
+        if (limit <= ackedIndex) return;
+        ackedIndex = limit;
+        for (Iterator<Map.Entry<Long, Result>> it = results.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Long, Result> done = it.next();
+            if (done.getKey() > limit) continue;
+            it.remove();
+            CompletableFuture<Result> future = pending.remove(done.getKey());
+            if (future != null) future.complete(done.getValue());
+        }
     }
 
     private void stepDown(long newTerm) { stepDown(newTerm, true); }
@@ -483,6 +595,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private void stepDown(long newTerm, boolean restartTimer) {
         if (newTerm > term) { term = newTerm; votedFor = null; }
         boolean led = role == Role.MASTER || role == Role.CANDIDATE;
+        masterLeaseUntil = Long.MIN_VALUE / 2;
         if (led) role = Role.FOLLOWER;
         master = null;
         progress.clear();
@@ -496,6 +609,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private void failPending() {
         var failed = new ArrayList<>(pending.values());
         pending.clear();
+        results.clear();
         for (var future : failed)
             future.completeExceptionally(new CacheException(503, "Write may be partially applied; retry the same revision and payload"));
     }
@@ -520,6 +634,8 @@ public final class ClusterCoordinator implements AutoCloseable {
             replicate(member, p);
         }
         advanceCommit();
+        refreshMasterLease();
+        acknowledge();
         if (!Quorum.reached(members, contacted)) {
             LOG.warn("{} lost contact with a quorum and steps down", self.id());
             stepDown(term);
@@ -575,13 +691,18 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (p.inFlight || role != Role.MASTER) return;
         if (p.needsSnapshot || p.nextIndex <= log.baseIndex()) { offerSnapshot(member, p); return; }
         long previous = p.nextIndex - 1;
+        long sentAt = timers.elapsed();
+        p.sentCommit = commitIndex;
         Message.Append append = new Message.Append(term, self, previous, log.term(previous),
             log.from(p.nextIndex, properties.getReplicationPageBytes()), commitIndex, memberIds(), inSync.contains(member.id()), clusterId);
         p.inFlight = true;
         long sentTerm = term;
         send(member.url(), append, reply -> {
             p.inFlight = false;
-            if (role == Role.MASTER && term == sentTerm && reply instanceof Message.Appended appended) onAppended(member, p, appended);
+            if (role == Role.MASTER && term == sentTerm && reply instanceof Message.Appended appended) {
+                if (appended.term() == term) p.ackedSentAt = Math.max(p.ackedSentAt, sentAt);
+                onAppended(member, p, appended);
+            }
         }, error -> {
             p.inFlight = false;
             meters.counter("dzdcache.replication.failures", "kind", "append").increment();
@@ -596,6 +717,10 @@ public final class ClusterCoordinator implements AutoCloseable {
         }
         if (reply.olderMaster()) { resyncRequired = true; stepDown(Math.max(term, reply.term())); return; }
         p.lastAck = timers.now();
+        Holder holder = leases.get(member.id());
+        if (holder != null && holder.startedAt == member.startedAt()) holder.applied = Math.max(holder.applied, reply.appliedIndex());
+        refreshMasterLease();
+        acknowledge();
         if (reply.installing()) return;
         if (reply.snapshotNeeded()) { p.needsSnapshot = true; replicate(member, p); return; }
         if (reply.success()) {
@@ -603,7 +728,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             p.nextIndex = p.matchIndex + 1;
             if (!lagging(p, timers.now())) inSync.add(member.id());
             advanceCommit();
-            if (p.nextIndex <= log.lastIndex()) replicate(member, p);
+            if (p.nextIndex <= log.lastIndex() || p.sentCommit < commitIndex) replicate(member, p);
         } else {
             p.nextIndex = Math.max(1, Math.min(reply.lastIndex() + 1, p.nextIndex - 1));
             replicate(member, p);
@@ -632,9 +757,9 @@ public final class ClusterCoordinator implements AutoCloseable {
             Result result = apply(entry);
             if (incarnation != before) return;
             appliedIndex = entry.index();
-            CompletableFuture<Result> future = pending.remove(entry.index());
-            if (future != null) future.complete(result);
+            if (pending.containsKey(entry.index())) results.put(entry.index(), result);
         }
+        acknowledge();
     }
 
     private Result apply(LogEntry entry) {
@@ -754,7 +879,7 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (role == Role.MASTER && !sender.id().equals(self.id()) && pairedWith(request.members())) {
             if (self.olderThan(sender)) {
                 term = Math.max(term, request.term()) + 1;
-                return new Message.Appended(term, false, 0, log.lastIndex(), false, false, true, memberIds());
+                return new Message.Appended(term, false, 0, log.lastIndex(), false, false, true, memberIds(), appliedIndex);
             }
             resyncRequired = true;
         }
@@ -776,7 +901,7 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (log.term(previous) != request.previousTerm()) {
             if (previous <= commitIndex) { resyncRequired = true; return refusal(true, false); }
             log.truncateFrom(previous);
-            return new Message.Appended(term, false, 0, previous - 1, false, false, false, memberIds());
+            return new Message.Appended(term, false, 0, previous - 1, false, false, false, memberIds(), appliedIndex);
         }
         for (LogEntry entry : request.entries()) {
             if (entry.index() <= log.lastIndex()) {
@@ -793,11 +918,11 @@ public final class ClusterCoordinator implements AutoCloseable {
             applyCommitted();
         }
         log.compact(appliedIndex, properties.getLogRetentionBytes());
-        return new Message.Appended(term, true, match, log.lastIndex(), false, false, false, memberIds());
+        return new Message.Appended(term, true, match, log.lastIndex(), false, false, false, memberIds(), appliedIndex);
     }
 
     private Message.Appended refusal(boolean snapshotNeeded, boolean installing) {
-        return new Message.Appended(term, false, 0, log.lastIndex(), snapshotNeeded, installing, false, memberIds());
+        return new Message.Appended(term, false, 0, log.lastIndex(), snapshotNeeded, installing, false, memberIds(), appliedIndex);
     }
 
     private Message onVote(Message.Vote request) {
@@ -848,11 +973,13 @@ public final class ClusterCoordinator implements AutoCloseable {
         Snapshot offered = snapshot;
         p.inFlight = true;
         long sentTerm = term;
+        long sentAt = timers.elapsed();
         send(member.url(), new Message.SnapshotOffer(term, self, offered.id(), offered.index(), offered.term(), offered.members(),
             offered.capture().descriptors(), clusterId), reply -> {
                 p.inFlight = false;
                 if (role != Role.MASTER || term != sentTerm) return;
                 if (reply instanceof Message.Ack) {
+                    p.ackedSentAt = Math.max(p.ackedSentAt, sentAt);
                     p.needsSnapshot = false;
                     p.lastAck = timers.now();
                     p.nextIndex = offered.index() + 1;

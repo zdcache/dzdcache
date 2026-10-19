@@ -12,10 +12,10 @@ public class DzdCacheHealthIndicator implements HealthIndicator {
     public DzdCacheHealthIndicator(ClusterCoordinator cluster, EngineHolder engines) { this.cluster = cluster; this.engines = engines; }
 
     @Override public Health health() {
-        return (cluster.ready() ? Health.up() : Health.outOfService())
+        return (cluster.current() ? Health.up() : Health.outOfService())
             .withDetail("role", cluster.role()).withDetail("term", cluster.term())
             .withDetail("master", cluster.master() == null ? "none" : cluster.master().id())
-            .withDetail("members", cluster.members().size()).withDetail("appliedIndex", cluster.appliedIndex())
+            .withDetail("members", cluster.members().size()).withDetail("appliedIndex", cluster.appliedIndex()).withDetail("current", cluster.current())
             .withDetail("unavailableTypes", engines.engine().unavailableTypes()).build();
     }
 }

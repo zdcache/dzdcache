@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ClusterSimulationTest {
     private static PutRequest put(SimulatedCluster cluster, long id, String name, long revision) {
-        JsonNode value = cluster.mapper.valueToTree(new JacksonRootTypeTest.Student(id, name, "Oslo", 20));
+        JsonNode value = cluster.mapper.valueToTree(new JacksonRootTypeTest.Student(id, name, "Oslo", (int) revision));
         return new PutRequest("students", 1, revision, value, null, null);
     }
     private static SimulatedCluster.Node started(SimulatedCluster cluster, String... ids) {
@@ -98,7 +98,8 @@ class ClusterSimulationTest {
         assertThat(cluster.now() - before).isLessThan(2_500);
         for (long id = 2; id <= 10; id++) assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N", 1))), 5_000))).isEqualTo(200);
         assertThat(revisions(cluster.nodes.get("c"))).isEmpty();
-        assertThat(cluster.nodes.get("c").coordinator.ready()).as("an isolated member keeps serving reads").isTrue();
+        assertThat(cluster.nodes.get("c").coordinator.ready()).as("an isolated node stays a member").isTrue();
+        assertThat(cluster.nodes.get("c").coordinator.current()).as("an isolated member stops serving reads").isFalse();
         cluster.heal();
         assertThat(cluster.runUntil(() -> revisions(cluster.nodes.get("c")).size() == 10, 10_000)).isTrue();
         assertIdentical(cluster);
@@ -225,6 +226,55 @@ class ClusterSimulationTest {
         assertThat(a.coordinator.members()).hasSize(3).extracting(Member::id).contains("a", "b");
     }
 
+    @Test void anIsolatedFollowerStopsServingWithinOneLeaseWhileTheOthersSeeEveryAcknowledgedWrite() {
+        SimulatedCluster cluster = new SimulatedCluster(13);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 5_000)).isTrue();
+        cluster.isolate("c");
+        long isolatedAt = cluster.now();
+        assertThat(cluster.runUntil(() -> !c.coordinator.current(), 5_000)).isTrue();
+        assertThat(cluster.now() - isolatedAt).as("time an isolated follower keeps serving")
+            .isLessThanOrEqualTo(cluster.properties.getReadLease().toMillis());
+        CompletableFuture<List<ClusterCoordinator.Outcome>> write = a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1)));
+        write.thenAccept(outcomes -> cluster.acknowledge(a, 1, 1));
+        assertThat(status(cluster.await(write, 5_000))).isEqualTo(200);
+        assertThat(cluster.read(b, 1)).isEqualTo(1L);
+        assertThat(cluster.read(c, 1)).as("not current").isNull();
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> c.coordinator.current(), 5_000)).isTrue();
+        assertThat(cluster.read(c, 1)).isEqualTo(1L);
+        assertThat(cluster.staleReads).isEmpty();
+    }
+
+    @Test void aDeposedMasterStopsServingBeforeTheNewMasterAcknowledgesAnything() {
+        SimulatedCluster cluster = new SimulatedCluster(14);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(cluster.runUntil(() -> a.coordinator.current(), 5_000)).isTrue();
+        cluster.isolate("a");
+        long[] stoppedServing = { -1 };
+        assertThat(cluster.runUntil(() -> {
+            if (stoppedServing[0] < 0 && !a.coordinator.current()) stoppedServing[0] = cluster.now();
+            return cluster.mastersNow().stream().anyMatch(node -> !node.id.equals("a"));
+        }, 10_000)).isTrue();
+        SimulatedCluster.Node next = cluster.mastersNow().stream().filter(node -> !node.id.equals("a")).findFirst().orElseThrow();
+        long electedAt = cluster.now();
+        CompletableFuture<List<ClusterCoordinator.Outcome>> write = next.coordinator.putAsync(List.of(put(cluster, 1, "N", 1)));
+        write.thenAccept(outcomes -> cluster.acknowledge(next, 1, 1));
+        assertThat(status(cluster.await(write, 5_000))).isEqualTo(200);
+        long acknowledgedAt = cluster.now();
+        assertThat(stoppedServing[0]).as("the deposed master stopped serving").isPositive().isLessThan(acknowledgedAt);
+        assertThat(acknowledgedAt - electedAt).as("a new master waits out every lease the old one could have granted")
+            .isGreaterThanOrEqualTo(cluster.properties.getReadLease().toMillis());
+        assertThat(cluster.read(a, 1)).as("the deposed master is not current").isNull();
+        assertThat(cluster.staleReads).isEmpty();
+    }
+
     @Test void aGracefulLeaveRemovesTheMemberAtOnce() {
         SimulatedCluster cluster = new SimulatedCluster(10);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c");
@@ -273,9 +323,15 @@ class ClusterSimulationTest {
                     else if (action < 45) { if (!cluster.nodes.get(target).alive) cluster.start(target); }
                     else {
                         List<SimulatedCluster.Node> live = cluster.live();
-                        if (!live.isEmpty()) live.get(random.nextInt(live.size())).coordinator
-                            .putAsync(List.of(put(cluster, random.nextInt(50), "v", step + 1)));
+                        if (!live.isEmpty()) {
+                            long id = random.nextInt(50);
+                            long rev = step + 1;
+                            SimulatedCluster.Node via = live.get(random.nextInt(live.size()));
+                            via.coordinator.putAsync(List.of(put(cluster, id, "v", rev)))
+                                .thenAccept(outcomes -> { if (outcomes.getFirst().status() == 200) cluster.acknowledge(via, id, rev); });
+                        }
                     }
+                    for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(50));
                     cluster.run(random.nextInt(600));
                 }
                 cluster.heal();
@@ -283,6 +339,7 @@ class ClusterSimulationTest {
                 cluster.run(60_000);
                 String label = "nodes " + nodes + " seed " + seed;
                 assertThat(cluster.violations).as(label).isEmpty();
+                assertThat(cluster.staleReads).as(label).isEmpty();
                 assertThat(cluster.mastersNow()).as(label).hasSize(1);
                 assertThat(cluster.live()).as(label).allMatch(node -> node.coordinator.ready());
             }
@@ -354,10 +411,11 @@ class ClusterSimulationTest {
                         SimulatedCluster.Node via = live.get(random.nextInt(live.size()));
                         CompletableFuture<List<ClusterCoordinator.Outcome>> write = via.coordinator.putAsync(List.of(put(cluster, id, "v" + rev, rev)));
                         write.thenAccept(outcomes -> {
-                            if (outcomes.getFirst().status() == 200) acknowledged.merge(id, rev, Math::max);
+                            if (outcomes.getFirst().status() == 200) { acknowledged.merge(id, rev, Math::max); cluster.acknowledge(via, id, rev); }
                         });
                         inFlight.add(write);
                     }
+                    for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(50));
                     cluster.run(random.nextInt(400));
                 }
                 cluster.heal();
@@ -374,6 +432,8 @@ class ClusterSimulationTest {
                         .as(label + " id " + id).isGreaterThanOrEqualTo(rev));
                 }
                 assertThat(acknowledged).as("some writes succeed").isNotEmpty();
+                assertThat(cluster.staleReads).as("nodes " + nodes + " seed " + seed).isEmpty();
+                assertThat(cluster.currentReads).as("some reads are served").isGreaterThan(100);
             }
         }
     }

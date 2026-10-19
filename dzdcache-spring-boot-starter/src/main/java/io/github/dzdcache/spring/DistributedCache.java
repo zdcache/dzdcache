@@ -30,5 +30,7 @@ public final class DistributedCache {
 
     public boolean ready() { return cluster.ready(); }
 
+    public boolean current() { return cluster.current(); }
+
     public ClusterCoordinator cluster() { return cluster; }
 }

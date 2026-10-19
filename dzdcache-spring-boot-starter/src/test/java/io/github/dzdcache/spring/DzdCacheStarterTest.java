@@ -1,14 +1,24 @@
 package io.github.dzdcache.spring;
 
+import io.github.dzdcache.cache.CacheException;
 import io.github.dzdcache.cache.EngineHolder;
+import io.github.dzdcache.cluster.HttpRaftTransport;
+import io.github.dzdcache.cluster.Message;
+import io.github.dzdcache.cluster.RaftTransport;
+import io.github.dzdcache.config.ServiceProperties;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.zdcache.IdentityDimension;
 import io.github.zdcache.SearchSpecification;
 import io.github.zdcache.ValueRange;
+import java.net.ConnectException;
 import java.net.ServerSocket;
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -43,9 +53,21 @@ class DzdCacheStarterTest {
         }
     }
 
+    static final Set<Integer> cutOff = ConcurrentHashMap.newKeySet();
+
+    @SpringBootConfiguration @Import(Students.class)
+    static class PartitionableStudents {
+        @Bean RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
+            RaftTransport http = new HttpRaftTransport(mapper.mapper(), properties);
+            int own = properties.getClusterPort();
+            return (URI peer, Message message) -> cutOff.contains(own) != cutOff.contains(peer.getPort())
+                ? CompletableFuture.failedFuture(new ConnectException("partitioned")) : http.send(peer, message);
+        }
+    }
+
     private final List<ConfigurableApplicationContext> nodes = new ArrayList<>();
 
-    @AfterEach void stop() { nodes.forEach(ConfigurableApplicationContext::close); }
+    @AfterEach void stop() { cutOff.clear(); nodes.forEach(ConfigurableApplicationContext::close); }
 
     private List<ConfigurableApplicationContext> start(Class<?>... configurations) throws Exception {
         int[] ports = new int[configurations.length];
@@ -64,7 +86,7 @@ class DzdCacheStarterTest {
             started.add(node);
             Thread.sleep(20);
         }
-        await(() -> started.stream().allMatch(node -> node.getBean(DistributedCache.class).ready()));
+        await(() -> started.stream().allMatch(node -> node.getBean(DistributedCache.class).current()));
         return started;
     }
 
@@ -111,7 +133,30 @@ class DzdCacheStarterTest {
         master.close();
         await(() -> others.stream().anyMatch(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER));
         assertThat(students(others.get(1)).put(new Student(2, "Anders", "Bergen", 31))).isEqualTo(1);
-        await(() -> others.stream().allMatch(node -> students(node).get(1L) != null && students(node).get(2L) != null));
+        await(() -> others.stream().allMatch(node -> node.getBean(DistributedCache.class).current()
+            && students(node).get(1L) != null && students(node).get(2L) != null));
+    }
+
+    @Test void aPartitionedMasterStopsServingAndTheOthersServeEveryAcknowledgedWrite() throws Exception {
+        var started = start(PartitionableStudents.class, PartitionableStudents.class, PartitionableStudents.class);
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
+            .findFirst().orElseThrow();
+        List<ConfigurableApplicationContext> others = started.stream().filter(node -> node != master).toList();
+        students(master).put(new Student(1, "Anna", "Oslo", 22));
+        cutOff.add(master.getBean(ServiceProperties.class).getClusterPort());
+        await(() -> !master.getBean(DistributedCache.class).current());
+        assertThatThrownBy(() -> students(master).get(1L)).isInstanceOf(CacheException.class)
+            .satisfies(error -> assertThat(((CacheException) error).status()).isEqualTo(503));
+        await(() -> others.stream().anyMatch(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER));
+        assertThat(students(others.get(0)).put(new Student(1, "Anna", "Bergen", 22))).isEqualTo(2);
+        for (ConfigurableApplicationContext node : others) {
+            await(() -> node.getBean(DistributedCache.class).current());
+            assertThat(students(node).get(1L).city()).as("an acknowledged write is visible at once").isEqualTo("Bergen");
+        }
+        cutOff.clear();
+        await(() -> master.getBean(DistributedCache.class).current());
+        assertThat(students(master).get(1L).city()).isEqualTo("Bergen");
     }
 
     @Test void aTypeOnlySomeInstancesDeclareIsUnavailableOnTheOthers() throws Exception {

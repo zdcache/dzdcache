@@ -28,13 +28,15 @@ import java.util.List;
     @JsonSubTypes.Type(value = Message.ForwardChange.class, name = "forward-change"),
     @JsonSubTypes.Type(value = Message.Written.class, name = "written"),
     @JsonSubTypes.Type(value = Message.AccessReport.class, name = "access-report"),
+    @JsonSubTypes.Type(value = Message.LeaseRequest.class, name = "lease-request"),
+    @JsonSubTypes.Type(value = Message.Lease.class, name = "lease"),
     @JsonSubTypes.Type(value = Message.Ack.class, name = "ack"),
     @JsonSubTypes.Type(value = Message.Refused.class, name = "refused")})
 public sealed interface Message {
     record Append(long term, Member master, long previousIndex, long previousTerm, List<LogEntry> entries, long commitIndex,
                   List<String> members, boolean inSync, String clusterId) implements Message { }
     record Appended(long term, boolean success, long matchIndex, long lastIndex, boolean snapshotNeeded, boolean installing,
-                    boolean olderMaster, List<String> members) implements Message { }
+                    boolean olderMaster, List<String> members, long appliedIndex) implements Message { }
     record Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members) implements Message { }
     record Voted(long term, boolean granted, boolean candidateIsMember, String clusterId) implements Message { }
     record SnapshotOffer(long term, Member master, String snapshotId, long index, long indexTerm, List<Member> members,
@@ -51,6 +53,8 @@ public sealed interface Message {
     record ForwardChange(EntryMutation mutation) implements Message { }
     record Written(SchemaView view, List<ClusterCoordinator.Outcome> outcomes) implements Message { }
     record AccessReport(List<Access> accesses) implements Message { }
+    record LeaseRequest(long term, Member member, long appliedIndex) implements Message { }
+    record Lease(long term, long millis, long ackedIndex) implements Message { }
     record Ack() implements Message { }
     record Refused(int status, String message) implements Message { }
 }
