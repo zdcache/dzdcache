@@ -52,9 +52,11 @@ class ClusterSimulationTest {
         List<SimulatedCluster.Node> members = cluster.live().stream().filter(node -> node.coordinator.ready()).toList();
         assertThat(cluster.runUntil(() -> members.stream().map(node -> node.coordinator.appliedIndex()).distinct().count() == 1, 10_000))
             .as("members apply the same log").isTrue();
-        String expected = members.getFirst().engine().fingerprint("students", 1);
-        for (SimulatedCluster.Node node : members)
-            assertThat(node.engine().fingerprint("students", 1)).as("state of " + node.id).isEqualTo(expected);
+        String expected = fingerprint(members.getFirst());
+        for (SimulatedCluster.Node node : members) assertThat(fingerprint(node)).as("state of " + node.id).isEqualTo(expected);
+    }
+    private static String fingerprint(SimulatedCluster.Node node) {
+        return node.engine().contains("students", 1) ? node.engine().fingerprint("students", 1) : "no students type";
     }
     private static int status(List<ClusterCoordinator.Outcome> outcomes) { return outcomes.getFirst().status(); }
 
@@ -147,23 +149,79 @@ class ClusterSimulationTest {
         assertThat(revisions(back)).containsOnlyKeys(1L, 2L);
     }
 
-    @Test void withTwoNodesAfterALinkFailureTheOlderNodesHistoryWins() {
-        SimulatedCluster cluster = new SimulatedCluster(6);
+    private static SimulatedCluster splitPair(long seed) {
+        SimulatedCluster cluster = new SimulatedCluster(seed);
         TypeDescriptor students = cluster.students(1_000);
         cluster.allowTwoMastersPerTerm = true;
         SimulatedCluster.Node a = started(cluster, "a", "b");
         cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "Shared", 1))), 5_000))).isEqualTo(200);
         cluster.run(500);
         cluster.isolate("b");
         cluster.run(5_000);
         assertThat(cluster.mastersNow()).extracting(node -> node.id).containsExactlyInAnyOrder("a", "b");
-        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "FromA", 1))), 5_000))).isEqualTo(200);
-        assertThat(status(cluster.await(cluster.nodes.get("b").coordinator.putAsync(List.of(put(cluster, 2, "FromB", 1))), 5_000))).isEqualTo(200);
+        return cluster;
+    }
+    private static void write(SimulatedCluster cluster, String via, long... ids) {
+        for (long id : ids)
+            assertThat(status(cluster.await(cluster.nodes.get(via).coordinator.putAsync(List.of(put(cluster, id, "From" + via, 1))), 5_000))).isEqualTo(200);
+    }
+
+    @Test void withTwoNodesTheOlderKeepsServingWhileTheYoungerWaitsOutTheTakeoverLimit() {
+        SimulatedCluster cluster = new SimulatedCluster(6);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.allowTwoMastersPerTerm = true;
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(cluster.runUntil(() -> b.coordinator.current(), 5_000)).isTrue();
+        cluster.isolate("b");
+        long isolatedAt = cluster.now();
+        assertThat(cluster.runUntil(() -> !b.coordinator.current(), 5_000)).isTrue();
+        assertThat(cluster.now() - isolatedAt).isLessThanOrEqualTo(cluster.properties.getReadLease().toMillis());
+        assertThat(cluster.runUntil(() -> b.coordinator.role() == ClusterCoordinator.Role.MASTER, 10_000)).isTrue();
+        assertThat(cluster.now() - isolatedAt).as("the younger takes over only after the limit")
+            .isGreaterThanOrEqualTo(cluster.properties.getTwoNodeTakeover().toMillis() * 96 / 100);
+        assertThat(a.coordinator.current()).as("the older kept serving").isTrue();
+    }
+
+    @Test void withTwoNodesTheLongerLogWinsAndTheOtherContinuesFromItsWatermarkWithoutASnapshot() {
+        SimulatedCluster cluster = splitPair(17);
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        long startedAt = a.coordinator.self().startedAt();
+        CacheEngine engine = a.engine();
+        write(cluster, "a", 10);
+        write(cluster, "b", 20, 21, 22);
+        assertThat(b.coordinator.appliedIndex()).as("the younger's log reaches further").isGreaterThan(a.coordinator.appliedIndex());
         cluster.heal();
-        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1
-            && revisions(cluster.nodes.get("b")).keySet().equals(Set.of(1L)), 20_000)).isTrue();
-        assertThat(master(cluster).id).isEqualTo("a");
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1 && a.coordinator.ready(), 20_000)).isTrue();
+        assertThat(master(cluster).id).isEqualTo("b");
+        assertThat(a.coordinator.self().startedAt()).as("the node that gives way becomes the younger").isGreaterThan(startedAt);
         assertIdentical(cluster);
+        assertThat(revisions(a)).containsOnlyKeys(1L, 20L, 21L, 22L);
+        assertThat(a.meters.counter("dzdcache.snapshots.installed").count()).isZero();
+        assertThat(a.meters.counter("dzdcache.two-node.reconciled").count()).isEqualTo(1);
+        assertThat(a.engine()).as("it continues with its own engine, without a restart").isSameAs(engine);
+    }
+
+    @Test void withTwoNodesTheOlderWinsWhenItsLogIsLonger() {
+        SimulatedCluster cluster = splitPair(18);
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        long startedAt = b.coordinator.self().startedAt();
+        CacheEngine engine = b.engine();
+        write(cluster, "a", 10, 11, 12, 13, 14);
+        write(cluster, "b", 20);
+        assertThat(a.coordinator.appliedIndex()).isGreaterThan(b.coordinator.appliedIndex());
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1 && b.coordinator.ready(), 20_000)).isTrue();
+        assertThat(master(cluster).id).isEqualTo("a");
+        assertThat(b.coordinator.self().startedAt()).isGreaterThan(startedAt);
+        assertIdentical(cluster);
+        assertThat(revisions(b)).containsOnlyKeys(1L, 10L, 11L, 12L, 13L, 14L);
+        assertThat(b.meters.counter("dzdcache.snapshots.installed").count()).isZero();
+        assertThat(b.engine()).isSameAs(engine);
     }
 
     @Test void aJoiningNodeInstallsASnapshotWhenTheLogNoLongerReachesBack() {
@@ -331,9 +389,10 @@ class ClusterSimulationTest {
     }
 
     @Test void unboundedFailuresNeverGiveATermTwoMastersAndTheClusterRecovers() {
-        for (int nodes : new int[] { 3, 4, 5 }) {
+        for (int nodes : new int[] { 2, 3, 4, 5 }) {
             for (long seed = 200; seed < 210; seed++) {
                 SimulatedCluster cluster = new SimulatedCluster(seed * 31 + nodes);
+                cluster.allowTwoMastersPerTerm = nodes == 2;
                 TypeDescriptor students = cluster.students(100_000);
                 String[] ids = new String[nodes];
                 for (int i = 0; i < nodes; i++) ids[i] = "n" + i;
@@ -365,9 +424,10 @@ class ClusterSimulationTest {
                 cluster.run(60_000);
                 String label = "nodes " + nodes + " seed " + seed;
                 assertThat(cluster.violations).as(label).isEmpty();
-                assertThat(cluster.staleReads).as(label).isEmpty();
+                if (nodes > 2) assertThat(cluster.staleReads).as(label).isEmpty();
                 assertThat(cluster.mastersNow()).as(label).hasSize(1);
                 assertThat(cluster.live()).as(label).allMatch(node -> node.coordinator.ready());
+                assertIdentical(cluster);
             }
         }
     }

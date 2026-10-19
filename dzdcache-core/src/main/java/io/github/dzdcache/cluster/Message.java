@@ -34,9 +34,9 @@ import java.util.List;
     @JsonSubTypes.Type(value = Message.Refused.class, name = "refused")})
 public sealed interface Message {
     record Append(long term, Member master, long previousIndex, long previousTerm, List<LogEntry> entries, long commitIndex,
-                  List<String> members, boolean inSync, String clusterId) implements Message { }
+                  List<String> members, boolean inSync, String clusterId, long lastIndex) implements Message { }
     record Appended(long term, boolean success, long matchIndex, long lastIndex, boolean snapshotNeeded, boolean installing,
-                    boolean olderMaster, List<String> members, long appliedIndex) implements Message { }
+                    boolean mustYield, List<String> members, long appliedIndex) implements Message { }
     record Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members) implements Message { }
     record Voted(long term, boolean granted, boolean candidateIsMember, String clusterId) implements Message { }
     record SnapshotOffer(long term, Member master, String snapshotId, long index, long indexTerm, List<Member> members,

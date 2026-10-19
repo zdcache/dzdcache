@@ -30,6 +30,11 @@ public final class CacheEngine {
     private final Map<Key, Local> local = new ConcurrentHashMap<>();
 
     private record Local(TypeDescriptor descriptor, RootType<?> type) { }
+    private record Saved(Revision revision, Object root, Long expiry) { }
+    private volatile boolean recording;
+    private final java.util.concurrent.atomic.AtomicInteger saved = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile boolean undoOverflowed;
+    private final Set<Key> created = ConcurrentHashMap.newKeySet();
 
     public CacheEngine(RootTypeFactory factory, ObjectMapper mapper, int maxSchemas, int maxRevisions) {
         this(factory, mapper, maxSchemas, maxRevisions, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_RETENTION, Clock.systemUTC());
@@ -69,10 +74,12 @@ public final class CacheEngine {
         RootType<?> type = resolve(key, descriptor);
         if (type == null) {
             unavailable.put(key, descriptor);
+            if (recording) created.add(key);
             return unavailableView(descriptor);
         }
         @SuppressWarnings("unchecked") Bucket bucket = new Bucket(descriptor, (RootType<Object>) type);
         buckets.put(key, bucket);
+        if (recording) created.add(key);
         return bucket.view();
     }
 
@@ -170,6 +177,27 @@ public final class CacheEngine {
         }
     }
 
+    public synchronized void beginUndo() { recording = true; }
+
+    public synchronized void endUndo() {
+        recording = false;
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.undo.clear(); }
+        created.clear();
+        saved.set(0);
+        undoOverflowed = false;
+    }
+
+    public boolean recordingUndo() { return recording; }
+
+    public synchronized boolean rollback() {
+        if (!recording) return true;
+        if (undoOverflowed) { endUndo(); return false; }
+        for (Key key : created) { buckets.remove(key); unavailable.remove(key); }
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.rollback(); }
+        endUndo();
+        return true;
+    }
+
     public Capture capture() {
         Capture capture = new Capture(descriptors());
         for (Bucket bucket : buckets.values()) synchronized (bucket) {
@@ -187,6 +215,7 @@ public final class CacheEngine {
         Bucket bucket = bucket(record.specification(), record.schemaVersion());
         synchronized (bucket) {
             Object id = bucket.type.readIdentity(record.identity());
+            bucket.save(id);
             boolean held = record.held() && record.value() != null;
             if (held) {
                 Object root = bucket.type.read(record.value());
@@ -212,6 +241,7 @@ public final class CacheEngine {
             if (mutation == null) return requested;
             Prepared next = bucket.prepare(mutation, id, used);
             if (next != null) {
+                bucket.save(id);
                 Revision previous = bucket.revisions.get(id);
                 long usedAt = previous == null ? 0 : previous.usedAt;
                 switch (mutation.operation()) {
@@ -414,6 +444,7 @@ public final class CacheEngine {
     }
     @SuppressWarnings("unchecked")
     private static final Comparator<Revision> LEAST_RECENTLY_USED = Comparator.<Revision>comparingLong(Revision::usedAt)
+        .thenComparing(revision -> revision.id.getClass().getName())
         .thenComparing(revision -> (Comparable<Object>) revision.id);
     private record Prepared(Object id, Object root, Digest digest) {}
 
@@ -427,6 +458,7 @@ public final class CacheEngine {
         final ConcurrentHashMap<Object, Long> accesses = new ConcurrentHashMap<>();
         final ConcurrentHashMap<Object, Long> expiries = new ConcurrentHashMap<>();
         final PriorityQueue<Deadline> deadlines = new PriorityQueue<>(Comparator.comparingLong(Deadline::at));
+        final Map<Object, Saved> undo = new HashMap<>();
 
         Bucket(TypeDescriptor descriptor, RootType<Object> type) {
             this.descriptor = descriptor; this.type = type;
@@ -445,7 +477,33 @@ public final class CacheEngine {
             return deadline != null && deadline <= clock.millis();
         }
         boolean staleRoot(Object root) { return !expiries.isEmpty() && stale(type.identity(root)); }
+        void save(Object id) {
+            if (!recording || undo.containsKey(id)) return;
+            if (saved.incrementAndGet() > maxRevisions) { undoOverflowed = true; return; }
+            Revision revision = revisions.get(id);
+            undo.put(id, new Saved(revision, revision != null && revision.held ? cache.peek(type.javaClass(), id) : null, expiries.get(id)));
+        }
+        void rollback() {
+            for (Map.Entry<Object, Saved> entry : undo.entrySet()) {
+                Object id = entry.getKey();
+                Saved before = entry.getValue();
+                Revision current = revisions.remove(id);
+                if (current != null && current.held) held.remove(current);
+                cache.remove(type.javaClass(), id);
+                expiries.remove(id);
+                if (before.revision() == null) continue;
+                if (before.root() != null) cache.put(before.root(), specification);
+                if (before.expiry() != null) {
+                    expiries.put(id, before.expiry());
+                    if (before.revision().state == State.VALUE) deadlines.add(new Deadline(before.expiry(), id, before.revision().revision));
+                }
+                revisions.put(id, before.revision());
+                if (before.revision().held) held.add(before.revision());
+            }
+            undo.clear();
+        }
         void remove(Object id) {
+            save(id);
             cache.remove(type.javaClass(), id);
             expiries.remove(id);
         }
@@ -459,6 +517,7 @@ public final class CacheEngine {
             while (records.hasNext()) {
                 var entry = records.next();
                 if (!retired(entry.getValue(), now)) continue;
+                save(entry.getKey());
                 if (entry.getValue().held) held.remove(entry.getValue());
                 remove(entry.getKey());
                 records.remove();
@@ -481,6 +540,7 @@ public final class CacheEngine {
         int pendingDeadlines() { return deadlines.size(); }
         SchemaView view() { return new SchemaView(descriptor.name(), descriptor.version(), descriptor.fingerprint(), type.javaClass().getName()); }
         void replace(Revision next) {
+            save(next.id);
             Revision previous = revisions.put(next.id, next);
             if (previous != null && previous.held) held.remove(previous);
             if (next.held) held.add(next);
