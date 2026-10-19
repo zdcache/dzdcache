@@ -1,0 +1,24 @@
+[versions]
+jackson = "3.1.5"
+jmh = "1.37"
+maven-publish = "0.37.0"
+micrometer = "1.17.1"
+slf4j = "2.0.18"
+spring-boot = "4.1.1"
+zdcache = "0.3.1"
+
+[libraries]
+jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
+jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
+jmh-generator = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
+micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
+slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+spring-boot-autoconfigure = { module = "org.springframework.boot:spring-boot-autoconfigure", version.ref = "spring-boot" }
+spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
+spring-boot-health = { module = "org.springframework.boot:spring-boot-health", version.ref = "spring-boot" }
+spring-boot-starter-jackson = { module = "org.springframework.boot:spring-boot-starter-jackson", version.ref = "spring-boot" }
+zdcache = { module = "io.github.zdcache:zdcache", version.ref = "zdcache" }
+
+[plugins]
+maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "maven-publish" }
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

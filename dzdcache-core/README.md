@@ -10,6 +10,10 @@ The replication engine behind dzdcache, without Spring. Most services should use
 </dependency>
 ```
 
+```kotlin
+implementation("io.github.zdcache:dzdcache-core:$dzdcacheVersion")
+```
+
 Dependencies: zdcache, Jackson 3 databind, Micrometer core and SLF4J.
 
 ## Packages

@@ -14,17 +14,13 @@ This is an initial implementation. **It does not guarantee strict freshness acro
 
 ## Build
 
-Requirements: **JDK 21** (including the compiler) and Maven 3.9+.
+Requirements: **JDK 21** (including the compiler). The Gradle wrapper downloads Gradle.
 
 ```bash
-mvn verify
+./gradlew build
 ```
 
-The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.github.zdcache:zdcache:0.3.1`. If a machine's default Maven mirror is unavailable, use the optional direct-Central settings without changing the machine configuration:
-
-```bash
-mvn -s scripts/maven-central-settings.xml -Dmaven.repo.local=.mvn-cache verify
-```
+The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.github.zdcache:zdcache:0.3.1`.
 
 The [original discussion](DESIGN.md), [earlier service proposal](SINGLE_NODE_SERVICE.md), and [JSON adapter experiment](experiments/json-root-adapter/README.md) remain as design history.
 

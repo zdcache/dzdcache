@@ -1,6 +1,6 @@
 .git
-**/.mvn-cache
-**/target
+**/.gradle
+**/build
 .idea
 .env
 experiments

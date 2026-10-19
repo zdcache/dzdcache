@@ -12,6 +12,10 @@ Embeds a replicated [ZDCache](https://github.com/zdcache/zdcache) in a Spring Bo
 </dependency>
 ```
 
+```kotlin
+implementation("io.github.zdcache:dzdcache-spring-boot-starter:$dzdcacheVersion")
+```
+
 Requires Java 21 and Spring Boot 4.1. The service needs no web stack: cluster traffic uses its own port.
 
 ## Declare a type

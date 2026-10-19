@@ -34,20 +34,16 @@ OpenAPI-generated client inspection and cache integration generation are optiona
 
 ## Build and run
 
-Requirements: **JDK 21** (including the compiler), Maven 3.9+, and curl for the examples.
+Requirements: **JDK 21** (including the compiler) and curl for the examples.
 
 ```bash
-mvn verify
-java -jar dzdcache-server/target/dzdcache-server.jar
+./gradlew build
+java -jar dzdcache-server/build/libs/dzdcache-server.jar
 ```
 
 The default is one standalone node on port 8080. The API is unauthenticated in that local default; set `DZDCACHE_API_TOKEN` to require `Authorization: Bearer <token>`. Distributed mode also requires a shared `DZDCACHE_CLUSTER_TOKEN`. The Kubernetes manifest requires both tokens from a Secret.
 
-The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.github.zdcache:zdcache:0.3.1`. If a machine's default Maven mirror is unavailable, use the optional direct-Central settings without changing the machine configuration:
-
-```bash
-mvn -s scripts/maven-central-settings.xml -Dmaven.repo.local=.mvn-cache verify
-```
+The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.github.zdcache:zdcache:0.3.1`.
 
 Run `bash scripts/smoke-test.sh` after packaging to exercise **the executable JAR**, including runtime compilation. `scripts/benchmark.sh` runs the in-process JMH benchmarks and passes its arguments to JMH; `scripts/load/search-with-writes.js` is a k6 load test of three users searching and getting by identity and one writer against a running node or cluster, configured with `BASE_URL`, `TOKEN`, `SIZE`, `CAPACITY` and `DURATION`. Tests also start two real HTTP nodes and a simulated Kubernetes API. They do not need Docker or a Kubernetes cluster.
 

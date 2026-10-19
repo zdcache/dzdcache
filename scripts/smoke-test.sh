@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-jar_path="${1:-dzdcache-server/target/dzdcache-server.jar}"
+jar_path="${1:-dzdcache-server/build/libs/dzdcache-server.jar}"
 port="${DZD_SMOKE_PORT:-18089}"
 work=$(mktemp -d)
 node_pid=""
