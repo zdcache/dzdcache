@@ -43,6 +43,9 @@ public final class RuntimeSchemaCompiler {
 
     public CompiledSchema compile(SchemaDefinition definition) {
         validateDefinition(definition);
+        if (definition.schema() == null || definition.schema().toString().getBytes(StandardCharsets.UTF_8).length > MAX_SCHEMA_BYTES) {
+            throw invalid("Schema is missing or exceeds " + MAX_SCHEMA_BYTES + " bytes");
+        }
         ParseState state = new ParseState();
         Node root = parse(definition.schema(), "schema", 0, state);
         if (root.kind != Kind.OBJECT || root.nullable) {
@@ -54,11 +57,9 @@ public final class RuntimeSchemaCompiler {
         }
         Set<String> dimensionNames = new HashSet<>();
         for (DimensionDefinition dimension : definition.dimensions()) {
-            if (dimension == null || dimension.name() == null || dimension.name().isBlank()
-                    || dimension.name().length() > 128 || !dimensionNames.add(dimension.name())) {
-                throw invalid("Dimension names must be nonempty and unique");
-            }
-            if (dimension.index() == null) throw invalid("A dimension index is required");
+            validateName(dimensionNames, dimension);
+            if (dimension.type() != null || dimension.parts().stream().anyMatch(part -> part.type() != null))
+                throw invalid("A dimension type is only declared without a schema; the schema decides the type");
             if (dimension.index().equalsIgnoreCase("compound")) validateCompound(root, dimension);
             else {
                 if (!dimension.parts().isEmpty()) throw invalid("Only a compound dimension declares parts");
@@ -116,6 +117,14 @@ public final class RuntimeSchemaCompiler {
         }
     }
 
+    static void validateName(Set<String> names, DimensionDefinition dimension) {
+        if (dimension == null || dimension.name() == null || dimension.name().isBlank()
+                || dimension.name().length() > 128 || !names.add(dimension.name())) {
+            throw invalid("Dimension names must be nonempty and unique");
+        }
+        if (dimension.index() == null) throw invalid("A dimension index is required");
+    }
+
     public static String sharedElement(List<DimensionDefinition> parts) {
         String shared = null;
         for (DimensionDefinition part : parts) {
@@ -130,16 +139,13 @@ public final class RuntimeSchemaCompiler {
         return shared;
     }
 
-    private static void validateDefinition(SchemaDefinition definition) {
+    static void validateDefinition(SchemaDefinition definition) {
         if (definition == null) throw invalid("A schema definition is required");
         if (definition.id() == null || !definition.id().matches("[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}")) {
             throw invalid("Schema id must contain 1-128 letters, digits, dots, underscores, colons or hyphens");
         }
         if (definition.version() < 1) throw invalid("Schema version must be positive");
         if (definition.capacity() < 1) throw invalid("Capacity must be positive");
-        if (definition.schema() == null || definition.schema().toString().getBytes(StandardCharsets.UTF_8).length > MAX_SCHEMA_BYTES) {
-            throw invalid("Schema is missing or exceeds " + MAX_SCHEMA_BYTES + " bytes");
-        }
         if (definition.dimensions().size() > 128) throw invalid("At most 128 dimensions are supported");
         if (definition.ttl() == null || definition.ttl().isBlank()) throw invalid("TTL is required (use infinite or an ISO-8601 duration)");
         if (!definition.ttl().equalsIgnoreCase("infinite")) {
@@ -352,7 +358,7 @@ public final class RuntimeSchemaCompiler {
         ObjectNode descriptor = mapper.createObjectNode();
         descriptor.put("id", definition.id());
         descriptor.put("version", definition.version());
-        descriptor.set("schema", definition.schema());
+        if (definition.schema() != null) descriptor.set("schema", definition.schema());
         descriptor.put("identity", definition.identity());
         descriptor.put("capacity", definition.capacity());
         descriptor.put("ttl", definition.ttl());
@@ -362,10 +368,13 @@ public final class RuntimeSchemaCompiler {
             item.put("name", dimension.name());
             item.put("path", dimension.path());
             item.put("index", dimension.index().toLowerCase(Locale.ROOT));
+            if (dimension.type() != null) item.put("type", dimension.type().toLowerCase(Locale.ROOT));
             if (!dimension.parts().isEmpty()) {
                 var parts = item.putArray("parts");
-                dimension.parts().forEach(part -> parts.addObject().put("path", part.path())
-                    .put("index", part.index().toLowerCase(Locale.ROOT)));
+                dimension.parts().forEach(part -> {
+                    ObjectNode entry = parts.addObject().put("path", part.path()).put("index", part.index().toLowerCase(Locale.ROOT));
+                    if (part.type() != null) entry.put("type", part.type().toLowerCase(Locale.ROOT));
+                });
             }
         });
         try {

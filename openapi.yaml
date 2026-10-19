@@ -5,12 +5,10 @@ info:
   description: |
     Generic JSON graph cache with runtime-compiled schemas. Publishers register
     schemas and send roots, updates and invalidations to a node through the service
-    address; DZDCache handles replication. Consumers own data-source selection and
-    fallback. DZDCache does not fetch business data from original services.
-    Searches return locally cached matching roots. HTTP 200 with [] is a successful
-    answer about current cache contents, not a cache miss. No client-code generator
-    is required. Distributed mutation failures may be partially applied: retry the same
-    revision, value and deadline. See docs/CONSISTENCY.md for protocol limitations.
+    address; DZDCache handles replication. Searches return locally cached matching
+    roots. HTTP 200 with [] is a successful answer about current cache contents,
+    not a cache miss. Distributed mutation failures may be partially applied: retry
+    the same revision, value and deadline. See docs/CONSISTENCY.md for protocol limitations.
 servers:
   - url: http://localhost:8080
 security:
@@ -272,14 +270,14 @@ components:
             expiresAt: {type: [integer, 'null'], format: int64}
     SchemaDefinition:
       type: object
-      required: [id, version, schema, identity, capacity]
+      required: [id, version, identity, capacity]
       properties:
         id: {type: string, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$'}
         version: {type: integer, minimum: 1}
         schema:
           type: object
           additionalProperties: true
-          description: Bounded supported JSON Schema subset; see docs/SCHEMAS.md
+          description: Optional bounded supported JSON Schema subset; see docs/SCHEMAS.md. Without a schema, every dimension and compound part declares a type and roots are stored as JSON.
         identity: {type: string, example: /id}
         capacity: {type: integer, minimum: 1}
         ttl: {type: string, default: infinite, example: PT5M}
@@ -293,6 +291,10 @@ components:
               name: {type: string, maxLength: 128}
               path: {type: string, example: '/courses/*/code', description: Required except for compound dimensions}
               index: {type: string, enum: [exact, prefix, range, compound]}
+              type:
+                type: string
+                enum: [string, integer, number, boolean, timestamp]
+                description: Required without a schema and rejected with one. A timestamp is an ISO-8601 instant string.
               parts:
                 type: array
                 minItems: 2
@@ -304,6 +306,7 @@ components:
                   properties:
                     path: {type: string}
                     index: {type: string, enum: [exact, prefix, range]}
+                    type: {type: string, enum: [string, integer, number, boolean, timestamp], description: Required without a schema and rejected with one.}
     SchemaView:
       type: object
       required: [id, version, fingerprint, javaClass]

@@ -1,0 +1,13 @@
+{
+  "id": "students-json",
+  "version": 1,
+  "identity": "/id",
+  "capacity": 10000,
+  "ttl": "infinite",
+  "dimensions": [
+    {"name": "sex", "path": "/sex", "index": "exact", "type": "string"},
+    {"name": "name", "path": "/name", "index": "prefix", "type": "string"},
+    {"name": "age", "path": "/age", "index": "range", "type": "integer"},
+    {"name": "course", "path": "/courses/*/code", "index": "exact", "type": "string"}
+  ]
+}

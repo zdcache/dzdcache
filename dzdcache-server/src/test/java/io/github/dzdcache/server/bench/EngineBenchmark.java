@@ -6,7 +6,7 @@ import io.github.dzdcache.server.schema.DimensionDefinition;
 import io.github.dzdcache.server.schema.RuntimeSchemaCompiler;
 import io.github.dzdcache.server.schema.SchemaDefinition;
 import io.github.dzdcache.server.schema.SchemaType;
-import io.github.dzdcache.server.schema.SchemaTypeFactory;
+import io.github.dzdcache.server.schema.ServerTypeFactory;
 import java.util.List;
 import java.util.SplittableRandom;
 import java.util.concurrent.TimeUnit;
@@ -38,7 +38,7 @@ public class EngineBenchmark {
 
     @Setup(Level.Trial) public void load() {
         RuntimeSchemaCompiler compiler = new RuntimeSchemaCompiler(mapper);
-        engine = new CacheEngine(new SchemaTypeFactory(compiler, mapper), mapper, 10, size * 2, size, CacheEngine.DEFAULT_RETENTION,
+        engine = new CacheEngine(new ServerTypeFactory(compiler, mapper), mapper, 10, size * 2, size, CacheEngine.DEFAULT_RETENTION,
             java.time.Clock.systemUTC());
         engine.publish(SchemaType.describe(new SchemaDefinition(SPECIFICATION, 1, mapper.readTree("""
             {"type":"object","required":["id","name","sex"],"properties":{

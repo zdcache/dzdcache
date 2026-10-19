@@ -31,6 +31,24 @@ Paths use JSON Pointer escaping (`~0` means `~`, `~1` means `/`). An array trave
 
 Only declared dimensions can be queried. The server decodes queries to the same runtime scalar type used during indexing. It returns matching full root graphs supplied by ZDCache; a course match returns the whole Student, including other courses.
 
+## Registration without a schema
+
+Omit `schema` and give every dimension and every compound part a `type` instead. No Java classes are compiled; each root is kept as compact JSON with its index values extracted once on write. See [student-json.json](../examples/student-json.json). These definitions are listed and inspected through the same endpoints.
+
+| `type` | Indexed and queried as |
+| --- | --- |
+| `string` | JSON string. |
+| `integer` | JSON number that fits a signed Java `long` exactly. |
+| `number` | JSON number as normalized `BigDecimal`. |
+| `boolean` | JSON boolean. |
+| `timestamp` | ISO-8601 instant string, such as `2024-05-01T12:00:00Z`. |
+
+- A value of another JSON type is rejected with 400. Missing or null values contribute no index value.
+- The identity is a JSON Pointer without `*` to a string or an integer.
+- `prefix` needs `string`; `range` cannot traverse arrays or use `boolean`. A compound part outside a shared array element that traverses arrays must be `exact`.
+- Paths, compound rules and limits are otherwise the same as with a schema. A dimension `type` is rejected when a schema is given, because the schema decides the type.
+- Properties that are not indexed are stored as sent and are not validated.
+
 ## Schema evolution and limits
 
 The `(id, version)` contract is immutable. Reposting the same definition is idempotent. Changed definitions require a new positive version, which starts a distinct empty bucket; there is no implicit migration or cross-version query. Property ordering in JSON objects is not significant. Preserve dimension array ordering when republishing an existing definition.

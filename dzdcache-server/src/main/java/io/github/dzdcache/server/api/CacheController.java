@@ -3,7 +3,7 @@ package io.github.dzdcache.server.api;
 import io.github.dzdcache.cache.*;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.dzdcache.server.schema.SchemaDefinition;
-import io.github.dzdcache.server.schema.SchemaTypeFactory;
+import io.github.dzdcache.server.schema.ServerTypeFactory;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.util.List;
@@ -19,9 +19,9 @@ public class CacheController {
     private final EngineHolder engines;
     private final ClusterCoordinator cluster;
     private final MeterRegistry meters;
-    private final SchemaTypeFactory schemas;
+    private final ServerTypeFactory schemas;
     private final tools.jackson.databind.ObjectMapper mapper;
-    public CacheController(EngineHolder engines, ClusterCoordinator cluster, MeterRegistry meters, SchemaTypeFactory schemas,
+    public CacheController(EngineHolder engines, ClusterCoordinator cluster, MeterRegistry meters, ServerTypeFactory schemas,
                            io.github.dzdcache.spring.DzdCacheMapper mapper) {
         this.engines = engines; this.cluster = cluster; this.meters = meters; this.schemas = schemas; this.mapper = mapper.mapper();
     }
@@ -44,13 +44,13 @@ public class CacheController {
     }
     @GetMapping("/schemas") public List<SchemaDefinition> schemas() {
         cluster.requireReady();
-        return engines.engine().descriptors().stream().filter(type -> TypeDescriptor.JSON_SCHEMA.equals(type.kind()))
+        return engines.engine().descriptors().stream().filter(ServerTypeFactory::describes)
             .map(type -> mapper.treeToValue(type.definition(), SchemaDefinition.class)).toList();
     }
     @GetMapping("/schemas/{id}/{version}") public SchemaDefinition schema(@PathVariable String id, @PathVariable int version) {
         cluster.requireReady();
         TypeDescriptor type = engines.engine().descriptor(id, version);
-        if (!TypeDescriptor.JSON_SCHEMA.equals(type.kind())) throw new CacheException(404, "Not a JSON Schema specification");
+        if (!ServerTypeFactory.describes(type)) throw new CacheException(404, "Not a JSON specification");
         return mapper.treeToValue(type.definition(), SchemaDefinition.class);
     }
     public record IdentityRequest(String specification, int schemaVersion, JsonNode identity, List<String> fields) {}

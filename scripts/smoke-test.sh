@@ -36,4 +36,11 @@ status=$(curl --silent -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer 
   -H 'Content-Type: application/json' "$base/cache/entries/get" \
   -d '{"specification":"students","schemaVersion":1,"identity":42}')
 [[ "$status" == '404' ]]
+request "$base/cache/schemas" --data-binary @examples/student-json.json > "$work/json-schema.json"
+request "$base/cache/entries" -d '{"specification":"students-json","schemaVersion":1,"revision":1,"value":{"id":7,"name":"Ola","sex":"male","age":30,"courses":[{"code":"MA201"}]}}' > /dev/null
+json_result=$(request "$base/cache/search" -d '{"specification":"students-json","schemaVersion":1,"dimension":"course","value":"MA201","fields":["/name"]}')
+[[ "$json_result" == '[{"name":"Ola"}]' ]]
+json_range=$(request "$base/cache/search" -d '{"specification":"students-json","schemaVersion":1,"dimension":"age","from":25,"to":35}')
+[[ "$json_range" == *'"Ola"'* ]]
 echo 'Packaged JAR: runtime compilation, graph search, empty results, and invalidation passed.'
+echo 'Packaged JAR: registration without a schema, typed search, and field selection passed.'

@@ -3,8 +3,8 @@ package io.github.dzdcache.server.cache;
 import io.github.dzdcache.cache.*;
 import io.github.dzdcache.server.schema.DimensionDefinition;
 import io.github.dzdcache.server.schema.RuntimeSchemaCompiler;
-import io.github.dzdcache.server.schema.SchemaType;
-import io.github.dzdcache.server.schema.SchemaTypeFactory;
+import io.github.dzdcache.server.schema.JsonRoot;
+import io.github.dzdcache.server.schema.ServerTypeFactory;
 import io.github.dzdcache.server.schema.SchemaDefinition;
 import java.time.Clock;
 import java.time.Duration;
@@ -29,11 +29,11 @@ class CacheEngineTest {
     private final MutableClock clock = new MutableClock(1_000);
 
     private SchemaView publish(CacheEngine engine, SchemaDefinition definition) {
-        return engine.publish(SchemaType.describe(definition, new RuntimeSchemaCompiler(mapper), mapper));
+        return engine.publish(new ServerTypeFactory(new RuntimeSchemaCompiler(mapper), mapper).describe(definition));
     }
     private CacheEngine engine() { return engine(100); }
     private CacheEngine engine(int maxRevisions) {
-        return new CacheEngine(new SchemaTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, maxRevisions, clock);
+        return new CacheEngine(new ServerTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, maxRevisions, clock);
     }
     private SchemaDefinition definition(int capacity, String ttl) {
         return new SchemaDefinition("students", 1, mapper.readTree("""
@@ -345,7 +345,7 @@ class CacheEngineTest {
     }
 
     @Test void searchesAreBoundedByALimitOrTheServerMaximum() {
-        CacheEngine cache = new CacheEngine(new SchemaTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, 100, 3, CacheEngine.DEFAULT_RETENTION, clock);
+        CacheEngine cache = new CacheEngine(new ServerTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, 100, 3, CacheEngine.DEFAULT_RETENTION, clock);
         publish(cache, definition(10, "infinite"));
         for (long id = 1; id <= 4; id++) cache.apply(put("{\"id\":" + id + ",\"name\":\"Ann" + id + "\"}", 1));
         assertThat(cache.search("students", 1, "name", json("\"Ann\""), null, null, 2)).hasSize(2);
@@ -359,14 +359,14 @@ class CacheEngineTest {
     }
 
     private CacheEngine retaining(int maxRevisions, long retentionMillis) {
-        return new CacheEngine(new SchemaTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, maxRevisions,
+        return new CacheEngine(new ServerTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, maxRevisions,
             CacheEngine.DEFAULT_MAX_SEARCH_RESULTS, Duration.ofMillis(retentionMillis), clock);
     }
 
     @Test void entriesAppliedAtTheSameTimeGiveTheSameStateWhateverEachNodesClock() {
         MutableClock late = new MutableClock(9_000);
         CacheEngine a = engine();
-        CacheEngine b = new CacheEngine(new SchemaTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, 100, late);
+        CacheEngine b = new CacheEngine(new ServerTypeFactory(new RuntimeSchemaCompiler(mapper), mapper), mapper, 10, 100, late);
         for (CacheEngine node : List.of(a, b)) {
             publish(node, definition(10, "infinite"));
             node.apply(new EntryMutation(PUT, "students", 1, id(1), json("{\"id\":1,\"name\":\"Brief\"}"), 1, 1_500L), 1_400);
@@ -525,6 +525,85 @@ class CacheEngineTest {
             "/id", List.of(new DimensionDefinition("by.name", "/name", "exact")), 10, "infinite"));
         cache.apply(put("{\"id\":1,\"name\":\"Anna\"}", 1));
         assertThat(ids(search(cache, "by.name", "\"Anna\""))).containsExactly(1L);
+    }
+
+    private SchemaDefinition jsonDefinition(int capacity) {
+        return new SchemaDefinition("students", 1, null, "/id", List.of(
+            new DimensionDefinition("sex", "/sex", "exact", "string"),
+            new DimensionDefinition("name", "/name", "prefix", "string"),
+            new DimensionDefinition("score", "/score", "range", "number"),
+            new DimensionDefinition("course", "/courses/*/title", "exact", "string"),
+            new DimensionDefinition("sexScore", null, "compound", List.of(
+                new DimensionDefinition(null, "/sex", "exact", "string"), new DimensionDefinition(null, "/score", "range", "number")))
+        ), capacity, "infinite");
+    }
+    private String text(byte[] json) { return new String(json, java.nio.charset.StandardCharsets.UTF_8); }
+
+    @Test void jsonTypesWithoutASchemaStoreSearchRenderAndInvalidateRoots() {
+        CacheEngine cache = engine();
+        SchemaView registered = publish(cache, jsonDefinition(10));
+        assertThat(registered.javaClass()).isEqualTo(JsonRoot.class.getName());
+        assertThat(publish(cache, jsonDefinition(10))).isEqualTo(registered);
+        EntryMutation alice = put("""
+            {"id":1,"name":"Alice","sex":"female","score":91.5,"courses":[{"title":"Math"},{"title":"English"}],"extra":{"kept":[true,null]}}""", 1);
+        cache.apply(alice);
+        cache.apply(put("{\"id\":2,\"name\":\"Alison\",\"sex\":\"female\",\"score\":100,\"courses\":[{\"title\":\"Physics\"}]}", 1));
+        cache.apply(put("{\"id\":3,\"name\":\"Bob\",\"sex\":\"male\",\"score\":75}", 1));
+
+        assertThat(ids(search(cache, "sex", "\"female\""))).containsExactlyInAnyOrder(1L, 2L);
+        assertThat(ids(search(cache, "name", "\"Ali\""))).containsExactlyInAnyOrder(1L, 2L);
+        assertThat(ids(search(cache, "course", "\"Math\""))).containsExactly(1L);
+        assertThat(ids(cache.search("students", 1, "score", null, json("91.5"), json("100")))).containsExactlyInAnyOrder(1L, 2L);
+        assertThat(ids(cache.search("students", 1, "sexScore", json("[\"female\"]"), json("95"), json("100")))).containsExactly(2L);
+        assertThat(cache.get("students", 1, id(1))).isEqualTo(alice.value());
+        assertThat(json(text(cache.getJson("students", 1, id(1), null)))).isEqualTo(alice.value());
+        assertThat(text(cache.getJson("students", 1, id(1), List.of("/name")))).isEqualTo("{\"name\":\"Alice\"}");
+        assertThat(text(cache.getJson("students", 1, id(1), List.of("/extra/kept", "/missing")))).isEqualTo("{\"extra\":{\"kept\":[true,null]}}");
+        CacheEngine.Rendered all = cache.searchJson("students", 1, "sex", json("\"female\""), null, null, null, null);
+        assertThat(all.count()).isEqualTo(2);
+        assertThat(json(text(all.json()))).containsExactlyInAnyOrderElementsOf(search(cache, "sex", "\"female\""));
+        assertThat(text(cache.searchJson("students", 1, "sex", json("\"male\""), null, null, null, List.of("/id")).json()))
+            .isEqualTo("[{\"id\":3}]");
+        assertThatThrownBy(() -> cache.apply(put("{\"id\":4,\"name\":4}", 1))).isInstanceOf(IllegalArgumentException.class);
+
+        cache.apply(remove(INVALIDATE, 1, 2));
+        assertThat(cache.get("students", 1, id(1))).isNull();
+        assertThat(cache.getJson("students", 1, id(1), null)).isNull();
+        assertThat(ids(search(cache, "sex", "\"female\""))).containsExactly(2L);
+        cache.apply(alice);
+        assertThat(cache.get("students", 1, id(1))).isNull();
+    }
+
+    @Test void jsonTypesEvictTheLeastRecentlyUsedRoot() {
+        CacheEngine cache = engine();
+        publish(cache, jsonDefinition(2));
+        putAt(cache, 1, "Ann", 1, 1_000);
+        putAt(cache, 2, "Bob", 1, 1_001);
+        clock.millis = 1_002;
+        assertThat(cache.get("students", 1, id(1))).isNotNull();
+        cache.touch(cache.drainAccesses());
+        putAt(cache, 3, "Cid", 1, 1_003);
+        assertThat(held(cache)).containsExactlyInAnyOrder(1L, 3L);
+        assertThat(cache.get("students", 1, id(2))).isNull();
+        assertThat(search(cache, "name", "\"Bob\"")).isEmpty();
+        assertThat(ids(search(cache, "name", "\"Cid\""))).containsExactly(3L);
+    }
+
+    @Test void aRestoredJsonTypeCaptureReproducesTheExactState() {
+        CacheEngine origin = engine();
+        publish(origin, jsonDefinition(2));
+        for (long id = 1; id <= 3; id++) putAt(origin, id, "N" + id, 1, 1_000 + id);
+        origin.apply(remove(INVALIDATE, 1, 2), 1_010);
+        CacheEngine joiner = engine();
+        publish(joiner, jsonDefinition(2));
+        snapshot(origin).forEach(joiner::restore);
+        assertThat(joiner.fingerprint("students", 1)).isEqualTo(origin.fingerprint("students", 1));
+        assertThat(held(joiner)).isEqualTo(held(origin)).containsExactlyInAnyOrder(2L, 3L);
+        assertThat(ids(search(joiner, "name", "\"N\""))).containsExactlyInAnyOrder(2L, 3L);
+        assertThat(joiner.get("students", 1, id(3))).isEqualTo(origin.get("students", 1, id(3)));
+        putAt(origin, 4, "N4", 1, 1_030);
+        putAt(joiner, 4, "N4", 1, 1_030);
+        assertThat(joiner.fingerprint("students", 1)).isEqualTo(origin.fingerprint("students", 1));
     }
 
     private static final class MutableClock extends Clock {

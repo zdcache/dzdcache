@@ -91,7 +91,7 @@ See [student-schema.json](../examples/student-schema.json) and [schema contracts
 | Field | Meaning |
 | --- | --- |
 | `id`, `version` | Immutable logical contract; different versions have separate caches. |
-| `schema` | Supported JSON Schema object description, including nested objects and arrays. |
+| `schema` | Optional. Supported JSON Schema object description, including nested objects and arrays. Without it, every dimension declares a `type` (`string`, `integer`, `number`, `boolean`, `timestamp`); see [student-json.json](../examples/student-json.json). |
 | `identity` | JSON Pointer to one non-null scalar identity, such as `/id`. |
 | `dimensions` | Named `exact`, `prefix`, or inclusive `range` searches. `*` traverses arrays. |
 | `capacity` | Maximum live root count in the local ZDCache instance. |

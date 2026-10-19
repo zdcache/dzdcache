@@ -6,4 +6,5 @@ public record TypeDescriptor(String kind, String name, int version, int capacity
                              JsonNode definition) {
     public static final String JSON_SCHEMA = "json-schema";
     public static final String JAVA = "java";
+    public static final String JSON = "json";
 }

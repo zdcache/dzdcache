@@ -22,7 +22,13 @@ class DistributedHttpTest {
            "id":{"type":"integer"},"sex":{"type":"string"},
            "address":{"type":"object","properties":{"city":{"type":"string"}}}}}}
         """;
-    private static final String GET = "{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":42}";
+    private static final String JSON_ONLY = """
+        {"id":"people","version":1,"identity":"/key","capacity":100,"ttl":"infinite",
+         "dimensions":[{"name":"name","path":"/name","index":"prefix","type":"string"},
+           {"name":"born","path":"/born","index":"range","type":"timestamp"},
+           {"name":"skill","path":"/skills/*","index":"exact","type":"string"}]}
+        """;
+    private static final String GET ="{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":42}";
     private static final String SEARCH = "{\"specification\":\"students\",\"schemaVersion\":1,\"dimension\":\"sex\",\"value\":\"female\"}";
 
     @Test void twoNodesReplicateThroughTheMasterAndTheSurvivorTakesOverWhenOneLeaves() throws Exception {
@@ -41,6 +47,23 @@ class DistributedHttpTest {
             assertThat(post(http, b, "/cache/search", compound.formatted("Oslo"), "client").body()).isEqualTo("[]");
             assertThat(post(http, b, "/cache/search", SEARCH.replace("}", ",\"fields\":[\"/address/city\"]}"), "client").body())
                 .isEqualTo("[{\"address\":{\"city\":\"Rome\"}}]");
+            assertThat(post(http, a, "/cache/schemas", JSON_ONLY, "client").statusCode()).isEqualTo(201);
+            String people = "{\"specification\":\"people\",\"schemaVersion\":1,\"revision\":1,\"value\":"
+                + "{\"key\":\"p-1\",\"name\":\"Ada\",\"born\":\"1815-12-10T00:00:00Z\",\"skills\":[\"math\",\"poetry\"]}}";
+            assertThat(post(http, a, "/cache/entries", people, "client").statusCode()).isEqualTo(200);
+            String getPerson = "{\"specification\":\"people\",\"schemaVersion\":1,\"identity\":\"p-1\",\"fields\":[\"/name\"]}";
+            assertThat(eventually(http, b, "/cache/entries/get", getPerson, body -> body.contains("Ada")).body()).isEqualTo("{\"name\":\"Ada\"}");
+            String skill = "{\"specification\":\"people\",\"schemaVersion\":1,\"dimension\":\"skill\",\"value\":\"poetry\",\"fields\":[\"/key\"]}";
+            assertThat(post(http, b, "/cache/search", skill, "client").body()).isEqualTo("[{\"key\":\"p-1\"}]");
+            String born = "{\"specification\":\"people\",\"schemaVersion\":1,\"dimension\":\"born\",\"from\":\"1800-01-01T00:00:00Z\",\"to\":\"1900-01-01T00:00:00Z\"}";
+            assertThat(JSON.readTree(post(http, b, "/cache/search", born, "client").body()).get(0).path("name").asText()).isEqualTo("Ada");
+            assertThat(post(http, b, "/cache/search", born.replace("\"1800-01-01T00:00:00Z\"", "1800"), "client").statusCode()).isEqualTo(400);
+            assertThat(post(http, a, "/cache/entries", people.replace("\"Ada\"", "7"), "client").statusCode()).isEqualTo(400);
+            var definition = JSON.readTree(get(http, b, "/cache/schemas/people/1").body());
+            assertThat(definition.has("schema")).isFalse();
+            assertThat(definition.path("dimensions").get(0).path("type").asText()).isEqualTo("string");
+            assertThat(JSON.readTree(get(http, b, "/cache/schemas/students/1").body()).path("dimensions").get(0).has("type")).isFalse();
+            assertThat(get(http, b, "/cache/schemas").body()).contains("\"people\"").contains("\"students\"");
             String batch = "[" + put(1, "Rome").replace("42", "43").replace("female", "male") + "," + put(1, "Rome").replace("42", "44").replace("female", "male") + "," + put(1, "Rome").replace("\"students\"", "\"unknown\"") + "]";
             var outcomes = JSON.readTree(post(http, a, "/cache/entries/batch", batch, "client").body());
             assertThat(java.util.stream.StreamSupport.stream(outcomes.spliterator(), false).map(o -> o.path("status").asInt()).toList()).as(outcomes.toString()).containsExactly(200, 200, 404);
@@ -139,6 +162,10 @@ class DistributedHttpTest {
     private static String put(int revision, String city) {
         return "{\"specification\":\"students\",\"schemaVersion\":1,\"revision\":" + revision
             + ",\"value\":{\"id\":42,\"sex\":\"female\",\"address\":{\"city\":\"" + city + "\"}}}";
+    }
+    private static HttpResponse<String> get(HttpClient http, int port, String path) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+            .timeout(Duration.ofSeconds(10)).header("Authorization", "Bearer client").GET().build(), HttpResponse.BodyHandlers.ofString());
     }
     private static HttpResponse<String> post(HttpClient http, int port, String path, String body, String token) throws Exception {
         return http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
