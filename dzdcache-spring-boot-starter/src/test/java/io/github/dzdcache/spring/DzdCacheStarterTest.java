@@ -57,6 +57,7 @@ class DzdCacheStarterTest {
 
     @SpringBootConfiguration @Import(Students.class)
     static class PartitionableStudents {
+        @Bean io.micrometer.core.instrument.MeterRegistry meterRegistry() { return new io.micrometer.core.instrument.simple.SimpleMeterRegistry(); }
         @Bean RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
             RaftTransport http = new HttpRaftTransport(mapper.mapper(), properties);
             int own = properties.getClusterPort();
@@ -148,6 +149,8 @@ class DzdCacheStarterTest {
         await(() -> !master.getBean(DistributedCache.class).current());
         assertThatThrownBy(() -> students(master).get(1L)).isInstanceOf(CacheException.class)
             .satisfies(error -> assertThat(((CacheException) error).status()).isEqualTo(503));
+        assertThat(master.getBean(io.micrometer.core.instrument.MeterRegistry.class).find("dzdcache.reads.refused").counters())
+            .anySatisfy(counter -> assertThat(counter.count()).isPositive());
         await(() -> others.stream().anyMatch(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER));
         assertThat(students(others.get(0)).put(new Student(1, "Anna", "Bergen", 22))).isEqualTo(2);
         for (ConfigurableApplicationContext node : others) {
@@ -157,6 +160,45 @@ class DzdCacheStarterTest {
         cutOff.clear();
         await(() -> master.getBean(DistributedCache.class).current());
         assertThat(students(master).get(1L).city()).isEqualTo("Bergen");
+    }
+
+    @Test void readsDuringAFailoverWaitForTheNewMasterInsteadOfFailing() throws Exception {
+        var started = start(PartitionableStudents.class, PartitionableStudents.class, PartitionableStudents.class);
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
+            .findFirst().orElseThrow();
+        ConfigurableApplicationContext reader = started.stream().filter(node -> node != master).findFirst().orElseThrow();
+        students(master).put(new Student(1, "Anna", "Oslo", 22));
+        await(() -> reader.getBean(DistributedCache.class).current());
+        cutOff.add(master.getBean(ServiceProperties.class).getClusterPort());
+        long until = System.nanoTime() + Duration.ofSeconds(4).toNanos();
+        int answered = 0;
+        while (System.nanoTime() < until) {
+            assertThat(students(reader).get(1L)).isEqualTo(new Student(1, "Anna", "Oslo", 22));
+            answered++;
+            Thread.sleep(25);
+        }
+        assertThat(cluster(reader).role() == ClusterCoordinator.Role.MASTER
+            || started.stream().anyMatch(node -> node != master && cluster(node).role() == ClusterCoordinator.Role.MASTER)).isTrue();
+        assertThat(answered).isPositive();
+    }
+
+    @Test void aNodeConfiguredWithAnotherClusterSizeDoesNotJoin() throws Exception {
+        var started = start(Students.class, Students.class);
+        int port;
+        try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
+        List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-x",
+            "--dzdcache.cluster-port=" + port, "--dzdcache.discovery.self-url=http://localhost:" + port,
+            "--dzdcache.cluster-token=secret", "--logging.level.root=OFF", "--spring.main.banner-mode=off"));
+        int peer = 0;
+        for (ConfigurableApplicationContext node : started)
+            args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + node.getBean(ServiceProperties.class).getClusterPort());
+        ConfigurableApplicationContext stranger = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new));
+        nodes.add(stranger);
+        await(() -> cluster(stranger).startupProblem() != null);
+        assertThat(cluster(stranger).startupProblem()).contains("cluster-size 3", "has 2");
+        assertThat(cluster(stranger).ready()).isFalse();
+        assertThat(cluster(started.get(0)).members()).hasSize(2);
     }
 
     @Test void aTypeOnlySomeInstancesDeclareIsUnavailableOnTheOthers() throws Exception {

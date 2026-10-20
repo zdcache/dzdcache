@@ -43,12 +43,12 @@ public class CacheController {
         return cluster.publish(schemas.describe(schema));
     }
     @GetMapping("/schemas") public List<SchemaDefinition> schemas() {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         return engines.engine().descriptors().stream().filter(ServerTypeFactory::describes)
             .map(type -> mapper.treeToValue(type.definition(), SchemaDefinition.class)).toList();
     }
     @GetMapping("/schemas/{id}/{version}") public SchemaDefinition schema(@PathVariable String id, @PathVariable int version) {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         TypeDescriptor type = engines.engine().descriptor(id, version);
         if (!ServerTypeFactory.describes(type)) throw new CacheException(404, "Not a JSON specification");
         return mapper.treeToValue(type.definition(), SchemaDefinition.class);
@@ -77,14 +77,14 @@ public class CacheController {
         return result;
     }
     @PostMapping("/entries/get") public ResponseEntity<byte[]> get(@RequestBody IdentityRequest request) {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         Timer.Sample sample = Timer.start(meters);
         byte[] graph = engines.engine().getJson(request.specification(), request.schemaVersion(), request.identity(), request.fields());
         sample.stop(meters.timer("dzdcache.get", "specification", request.specification(), "outcome", graph == null ? "miss" : "hit"));
         return graph == null ? ResponseEntity.notFound().build() : ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(graph);
     }
     @PostMapping("/search") public ResponseEntity<byte[]> search(@RequestBody SearchRequest request) {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         Timer.Sample sample = Timer.start(meters);
         CacheEngine.Rendered found = engines.engine().searchJson(request.specification(), request.schemaVersion(), request.dimension(),
             request.value(), request.from(), request.to(), request.limit(), request.fields());

@@ -118,7 +118,7 @@ All entry and query paths are generic. The specification and version travel in t
 | `POST /cache/entries/evict` | Remove a matching revision on every member; 204. |
 | `GET /actuator/health/readiness` | 200 when this node can serve fresh reads; 503 while joining or without a read lease. |
 | `GET /actuator/health/liveness` | Process health, independent of peer reachability. |
-| `GET /actuator/prometheus` | Metrics: search and get timers, search result sizes, mutation, election, snapshot and replication-failure counts, readiness, master, term, members, applied log index, cached roots and revision records per schema. |
+| `GET /actuator/prometheus` | Metrics: search and get timers, search result sizes, mutation, election, snapshot and replication-failure counts, readiness, whether the node serves fresh reads, refused reads by reason, master, term, members, reachable members and configured size, replication lag per member, two-node reconciles, startup problems, applied log index, cached roots and revision records per schema. [monitoring/](../monitoring) has Prometheus alert rules and a Grafana dashboard. |
 
 Invalid input returns 400; incompatible schemas or equal-revision conflicts return 409; schema/revision metadata limits return 429; oversized requests return 413; searches matching more than `max-search-results` roots without a `limit` return 422; availability/replication failures return 503. Unknown specifications return 404. A failed distributed mutation **may already have applied** to some nodes: retry its unchanged revision and payload. Older mutations are ignored and can still receive a successful response.
 
@@ -173,6 +173,7 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.heartbeat-interval` | 200 milliseconds |
 | `dzdcache.election-timeout` | 1 second |
 | `dzdcache.read-lease` | 500 milliseconds |
+| `dzdcache.read-wait` | 3 seconds; how long a read waits for its node to become current before answering 503 |
 | `dzdcache.two-node-takeover` | 3 seconds |
 | `dzdcache.member-timeout` | 30 seconds |
 | `dzdcache.log-retention-bytes` | 64 MiB |

@@ -45,8 +45,8 @@ public sealed interface Message {
     record SnapshotPage(boolean missing, List<SnapshotRecord> records, Integer next) implements Message { }
     record WhoLeads() implements Message { }
     record Leader(Member self, boolean member, Member master, List<Member> members, long lastIndex, long lastTerm,
-                  String clusterId) implements Message { }
-    record Join(Member member) implements Message { }
+                  String clusterId, int clusterSize) implements Message { }
+    record Join(Member member, int clusterSize) implements Message { }
     record Leave(Member member) implements Message { }
     record ForwardPublish(TypeDescriptor schema) implements Message { }
     record ForwardPuts(List<PutRequest> puts) implements Message { }

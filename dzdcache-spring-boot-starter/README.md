@@ -52,7 +52,7 @@ students.invalidate(1L);
 - `put`, `putAll`, `invalidate` and `evict` return once the change has committed and every instance that may serve reads has applied it, so a read on any instance sees it. `putAsync` returns a `CompletableFuture`.
 - Without a revision, a write gets the next revision for its identity and the last write wins. Pass an explicit revision to `put(value, revision)` or `invalidate(id, revision)` when the data owner orders its changes; older revisions are then ignored.
 - `get` and `search` read the local replica. A `get` counts as use for the LRU on every instance; a search does not.
-- Reads throw `CacheException` (503) while the instance cannot confirm it has every acknowledged write: while it joins, after it loses contact with the master, and during a failover. Writes throw it when no master can be reached. `DistributedCache.current()` reports whether reads can be served, and `ready()` whether the instance is a member.
+- A read waits up to `dzdcache.read-wait` (3 seconds) while the instance cannot confirm it has every acknowledged write, as during a failover, then throws `CacheException` (503); the calling thread blocks meanwhile. Writes throw it when no master can be reached. `DistributedCache.current()` reports whether reads can be served, and `ready()` whether the instance is a member.
 
 Values are converted with the service's `ObjectMapper` when there is exactly one; cluster messages use a private mapper.
 
@@ -97,7 +97,7 @@ With Actuator present, a `clusterHealthIndicator` reports the role, master, memb
 management.endpoint.health.group.readiness.include: readinessState,cluster
 ```
 
-Metrics are registered in the service's `MeterRegistry` when there is one.
+Metrics are registered in the service's `MeterRegistry` when there is one; [monitoring/](../monitoring) has Prometheus alert rules and a Grafana dashboard for them.
 
 ## Limits
 

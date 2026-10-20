@@ -15,6 +15,7 @@ public class ServiceProperties {
     private Duration electionTimeout = Duration.ofSeconds(1);
     private Duration readLease = Duration.ofMillis(500);
     private Duration twoNodeTakeover = Duration.ofSeconds(3);
+    private Duration readWait = Duration.ofSeconds(3);
     private Duration memberTimeout = Duration.ofSeconds(30);
     private long logRetentionBytes = 64L * 1024 * 1024;
     private int clusterPort = 7070;
@@ -33,6 +34,7 @@ public class ServiceProperties {
             throw new IllegalArgumentException("heartbeat-interval must be positive, election-timeout at least twice it, member-timeout above election-timeout");
         if (readLease == null || readLease.compareTo(heartbeatInterval.multipliedBy(2)) < 0 || readLease.compareTo(electionTimeout) > 0)
             throw new IllegalArgumentException("read-lease must be at least twice heartbeat-interval and at most election-timeout");
+        if (readWait == null || readWait.isNegative()) throw new IllegalArgumentException("read-wait cannot be negative");
         if (twoNodeTakeover == null || twoNodeTakeover.compareTo(electionTimeout) < 0)
             throw new IllegalArgumentException("two-node-takeover must be at least election-timeout");
         if (accessFlushInterval == null || accessFlushInterval.toMillis() < 1)
@@ -59,6 +61,7 @@ public class ServiceProperties {
     public Duration getElectionTimeout() { return electionTimeout; } public void setElectionTimeout(Duration v) { electionTimeout = v; }
     public Duration getReadLease() { return readLease; } public void setReadLease(Duration v) { readLease = v; }
     public Duration getTwoNodeTakeover() { return twoNodeTakeover; } public void setTwoNodeTakeover(Duration v) { twoNodeTakeover = v; }
+    public Duration getReadWait() { return readWait; } public void setReadWait(Duration v) { readWait = v; }
     public Duration getMemberTimeout() { return memberTimeout; } public void setMemberTimeout(Duration v) { memberTimeout = v; }
     public long getLogRetentionBytes() { return logRetentionBytes; } public void setLogRetentionBytes(long v) { logRetentionBytes = v; }
     public int getClusterPort() { return clusterPort; } public void setClusterPort(int v) { clusterPort = v; }

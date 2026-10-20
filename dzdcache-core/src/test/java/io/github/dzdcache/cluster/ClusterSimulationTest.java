@@ -301,6 +301,10 @@ class ClusterSimulationTest {
         assertThat(status(cluster.await(write, 5_000))).isEqualTo(200);
         assertThat(cluster.read(b, 1)).isEqualTo(1L);
         assertThat(cluster.read(c, 1)).as("not current").isNull();
+        cluster.run(200);
+        assertThat(a.meters.get("dzdcache.replication.lag").tag("member", "c").gauge().value()).isPositive();
+        assertThat(a.meters.get("dzdcache.members.reachable").gauge().value()).isEqualTo(2);
+        assertThat(c.meters.get("dzdcache.current").gauge().value()).isZero();
         cluster.heal();
         assertThat(cluster.runUntil(() -> c.coordinator.current(), 5_000)).isTrue();
         assertThat(cluster.read(c, 1)).isEqualTo(1L);

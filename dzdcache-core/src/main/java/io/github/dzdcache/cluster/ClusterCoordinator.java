@@ -78,6 +78,8 @@ public final class ClusterCoordinator implements AutoCloseable {
     private final Map<String, Message.Leader> peerLogs = new HashMap<>();
     private long peerLogsAt = Long.MIN_VALUE / 2;
     private final MultiGauge entries;
+    private final MultiGauge lag;
+    private volatile double reachable = Double.NaN;
     private final MultiGauge revisions;
 
     private volatile Member self;
@@ -90,6 +92,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private volatile long appliedIndex;
     private volatile boolean closed;
     private volatile String startupProblem;
+    private final Object currency = new Object();
     private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
     private volatile long servingFrom = Long.MAX_VALUE;
     private volatile long noopIndex = Long.MAX_VALUE;
@@ -126,6 +129,11 @@ public final class ClusterCoordinator implements AutoCloseable {
         Gauge.builder("dzdcache.term", this, coordinator -> coordinator.term).register(meters);
         Gauge.builder("dzdcache.members", this, coordinator -> coordinator.members.size()).register(meters);
         Gauge.builder("dzdcache.applied.index", this, coordinator -> coordinator.appliedIndex).register(meters);
+        Gauge.builder("dzdcache.current", this, coordinator -> coordinator.current() ? 1 : 0).register(meters);
+        Gauge.builder("dzdcache.cluster.size", this, coordinator -> coordinator.size()).register(meters);
+        Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).register(meters);
+        Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).register(meters);
+        lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
         entries = MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters);
         revisions = MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters);
     }
@@ -163,6 +171,33 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (!current()) throw new CacheException(503, "This node cannot confirm that it has every acknowledged write");
     }
 
+    public void awaitCurrent() {
+        long deadline = System.nanoTime() + properties.getReadWait().toNanos();
+        synchronized (currency) {
+            while (!current()) {
+                long left = (deadline - System.nanoTime()) / 1_000_000;
+                if (left <= 0) {
+                    String reason = notCurrentReason();
+                    meters.counter("dzdcache.reads.refused", "reason", reason).increment();
+                    throw new CacheException(503, reason.equals("joining") ? "Cache is joining the cluster"
+                        : "This node cannot confirm that it has every acknowledged write (" + reason + ")");
+                }
+                try { currency.wait(Math.min(left, 50)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new CacheException(503, "Interrupted"); }
+            }
+        }
+    }
+
+    private String notCurrentReason() {
+        if (!ready()) return "joining";
+        long now = timers.elapsed();
+        if (role == Role.MASTER) return now < servingFrom || appliedIndex < noopIndex ? "new-master" : "master-lease";
+        if (master == null) return "no-master";
+        return now >= leaseUntil ? "no-lease" : "catching-up";
+    }
+
+    private void changedCurrency() { synchronized (currency) { currency.notifyAll(); } }
+
     public SchemaView publish(TypeDescriptor schema) { return await(publishAsync(schema)); }
     public List<Outcome> put(List<PutRequest> puts) { return await(putAsync(puts)); }
     public Outcome change(EntryMutation mutation) { return await(changeAsync(mutation)); }
@@ -189,7 +224,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             case Message.SnapshotPageRequest request -> CompletableFuture.completedFuture(onSnapshotPage(request));
             case Message.WhoLeads ignored -> CompletableFuture.completedFuture(
                 new Message.Leader(self, role != Role.STARTING && members.contains(self), role == Role.STARTING ? null : master(), members,
-                    log.lastIndex(), log.lastTerm(), clusterId));
+                    log.lastIndex(), log.lastTerm(), clusterId, size()));
             case Message.Join join -> onJoin(join);
             case Message.Leave leave -> onLeave(leave);
             case Message.ForwardPublish request -> forwarded(request);
@@ -405,10 +440,10 @@ public final class ClusterCoordinator implements AutoCloseable {
         List<Message.Leader> answers = new ArrayList<>();
         int[] waiting = { peers.size() };
         int[] answered = { 0 };
-        String[] duplicate = { null };
+        String[] conflict = { null };
         Runnable decide = () -> {
             if (--waiting[0] > 0 || role != Role.STARTING || self != started) return;
-            if (duplicate[0] != null) { problem(duplicate[0]); return; }
+            if (conflict[0] != null) { problem(conflict[0]); return; }
             startupProblem = null;
             Optional<Member> current = answers.stream().map(Message.Leader::master).filter(Objects::nonNull).findFirst();
             if (current.isPresent()) { join(current.get()); return; }
@@ -421,7 +456,9 @@ public final class ClusterCoordinator implements AutoCloseable {
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
             else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
-                duplicate[0] = "Another node at " + peer + " uses the node id " + self.id();
+                conflict[0] = "Another node at " + peer + " uses the node id " + self.id();
+            else if (reply instanceof Message.Leader leader && leader.clusterSize() != size())
+                conflict[0] = "This node is configured with cluster-size " + size() + ", but the node at " + peer + " has " + leader.clusterSize();
             else if (reply instanceof Message.Leader leader) {
                 answered[0]++;
                 answers.add(leader);
@@ -459,7 +496,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private void join(Member current) {
-        send(current.url(), new Message.Join(self), reply -> {
+        send(current.url(), new Message.Join(self, size()), reply -> {
             if (reply instanceof Message.Ack && role == Role.STARTING) {
                 role = Role.FOLLOWER;
                 master = current;
@@ -615,6 +652,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             if (!(reply instanceof Message.Lease lease) || lease.millis() <= 0 || lease.term() != sentTerm || term != sentTerm || self != asked) return;
             leaseIndex = lease.ackedIndex();
             leaseUntil = Math.max(leaseUntil, sentAt + lease.millis());
+            changedCurrency();
         }, error -> leaseInFlight = false);
     }
 
@@ -663,6 +701,8 @@ public final class ClusterCoordinator implements AutoCloseable {
         if (newTerm > term) { term = newTerm; votedFor = null; }
         boolean led = role == Role.MASTER || role == Role.CANDIDATE;
         masterLeaseUntil = Long.MIN_VALUE / 2;
+        reachable = Double.NaN;
+        lag.register(List.of(), true);
         if (led) role = Role.FOLLOWER;
         master = null;
         progress.clear();
@@ -697,6 +737,10 @@ public final class ClusterCoordinator implements AutoCloseable {
         advanceCommit();
         refreshMasterLease();
         acknowledge();
+        reachable = 1 + progress.values().stream().filter(p -> now - p.lastAck < properties.getElectionTimeout().toMillis()).count();
+        long last = log.lastIndex();
+        lag.register(members.stream().filter(member -> !member.id().equals(self.id()) && progress.containsKey(member.id()))
+            .map(member -> MultiGauge.Row.of(Tags.of("member", member.id()), last - progress.get(member.id()).matchIndex)).toList(), true);
         if (!Quorum.reached(size(), members, contacted)) {
             LOG.warn("{} lost contact with a quorum and steps down", self.id());
             stepDown(term);
@@ -831,6 +875,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             if (pending.containsKey(entry.index())) results.put(entry.index(), result);
         }
         acknowledge();
+        changedCurrency();
     }
 
     private Result apply(LogEntry entry) {
@@ -924,6 +969,9 @@ public final class ClusterCoordinator implements AutoCloseable {
     private CompletableFuture<Message> onJoin(Message.Join join) {
         if (role != Role.MASTER) return CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
         Member joining = join.member();
+        if (join.clusterSize() != size())
+            return CompletableFuture.completedFuture(new Message.Refused(409, "Node " + joining.id() + " is configured with cluster-size "
+                + join.clusterSize() + ", but the cluster has " + size()));
         Optional<Member> existing = members.stream().filter(member -> member.id().equals(joining.id())).findFirst();
         if (existing.isPresent() && existing.get().equals(joining)) return CompletableFuture.completedFuture(new Message.Ack());
         if (existing.isEmpty() && members.size() >= size())

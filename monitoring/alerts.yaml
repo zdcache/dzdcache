@@ -1,0 +1,67 @@
+groups:
+  - name: dzdcache
+    rules:
+      - alert: DzdcacheNoMaster
+        expr: max by (job) (dzdcache_master) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: No dzdcache node is master
+          description: Writes fail, and reads stop as soon as the read leases run out.
+      - alert: DzdcacheQuorumAtRisk
+        expr: max by (job) (dzdcache_members_reachable) * 2 <= max by (job) (dzdcache_cluster_size) and max by (job) (dzdcache_cluster_size) > 2
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: The master reaches at most half of the configured nodes
+          description: One more failure stops writes and fresh reads.
+      - alert: DzdcacheMembersUnreachable
+        expr: max by (job) (dzdcache_members_reachable) < max by (job) (dzdcache_cluster_size)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: The master does not reach every configured node
+      - alert: DzdcacheStartupProblem
+        expr: dzdcache_startup_problem == 1
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: A dzdcache node refuses to start
+          description: Misconfiguration such as a self-url that reaches another node, a duplicate node id or a different cluster-size; see the node's health details.
+      - alert: DzdcacheNodeNotCurrent
+        expr: dzdcache_current == 0 and dzdcache_ready == 1
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: A member cannot confirm it has every acknowledged write and answers reads with 503
+      - alert: DzdcacheNodeNotReady
+        expr: dzdcache_ready == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: A dzdcache node has not joined the cluster
+      - alert: DzdcacheReplicationLag
+        expr: max by (job, member) (dzdcache_replication_lag) > 1000
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: A member is more than 1000 log entries behind the master
+      - alert: DzdcacheReadsRefused
+        expr: sum by (job, reason) (rate(dzdcache_reads_refused_total[5m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Reads are refused with 503 outside a short failover
+      - alert: DzdcacheTwoNodeWritesDiscarded
+        expr: increase(dzdcache_two_node_reconciled_total[15m]) > 0
+        for: 0m
+        labels: {severity: critical}
+        annotations:
+          summary: Two nodes acted as master at the same time and one side's writes were discarded
+          description: The link between the two nodes failed for longer than two-node-takeover; publishers should republish what they wrote in that period.
+      - alert: DzdcacheFrequentElections
+        expr: sum by (job) (increase(dzdcache_elections_total[15m])) > 5
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: More than five elections in 15 minutes

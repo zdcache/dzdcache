@@ -25,7 +25,7 @@ public final class ClusterCache<T, ID> {
     public CacheType<T, ID> type() { return type; }
 
     public T get(ID id) {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         return type.javaClass().cast(engines.engine().find(type.name(), type.version(), id));
     }
 
@@ -34,7 +34,7 @@ public final class ClusterCache<T, ID> {
     public List<T> search(Getter<T, ?> dimension, Object... query) { return search(null, Getters.name(dimension), query); }
 
     public List<T> search(Integer limit, String dimension, Object... query) {
-        cluster.requireCurrent();
+        cluster.awaitCurrent();
         return engines.engine().search(type.name(), type.version(), dimension, query, limit).stream().map(type.javaClass()::cast).toList();
     }
 

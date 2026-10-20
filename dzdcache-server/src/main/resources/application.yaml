@@ -1,6 +1,9 @@
 spring:
   application:
     name: dzdcache
+  threads:
+    virtual:
+      enabled: true
 server:
   shutdown: graceful
 management:
