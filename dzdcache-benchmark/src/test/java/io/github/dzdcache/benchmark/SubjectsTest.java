@@ -12,7 +12,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class SubjectsTest {
-    static List<String> subjects() { return Subjects.names(); }
+    static List<String> subjects() { return Subjects.names().stream().filter(Subjects::available).toList(); }
 
     private static Set<Long> ids(List<Person> people) { return people.stream().map(Person::id).collect(Collectors.toCollection(TreeSet::new)); }
     private static Set<Long> expected(Person[] people, Predicate<Person> match) {

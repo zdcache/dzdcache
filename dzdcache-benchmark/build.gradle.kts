@@ -18,6 +18,14 @@ val planArgs = plan.map {
     }
 }
 val extraArgs = providers.gradleProperty("jmh.args").map { it.split(" ").filter(String::isNotBlank) }.orElse(listOf())
+val igniteJvmArgs = listOf("java.base/jdk.internal.misc", "java.base/sun.nio.ch", "java.management/com.sun.jmx.mbeanserver",
+    "jdk.internal.jvmstat/sun.jvmstat.monitor", "java.base/sun.reflect.generics.reflectiveObjects").map { "--add-exports=$it=ALL-UNNAMED" } +
+    listOf("java.base/jdk.internal.access", "java.base/jdk.internal.misc", "java.base/sun.nio.ch", "java.base/sun.util.calendar",
+        "java.management/com.sun.jmx.mbeanserver", "jdk.internal.jvmstat/sun.jvmstat.monitor", "java.base/sun.reflect.generics.reflectiveObjects",
+        "jdk.management/com.sun.management.internal", "java.base/java.io", "java.base/java.nio", "java.base/java.net", "java.base/java.util",
+        "java.base/java.util.concurrent", "java.base/java.util.concurrent.locks", "java.base/java.util.concurrent.atomic", "java.base/java.lang",
+        "java.base/java.lang.invoke", "java.base/java.math", "java.sql/java.sql", "java.base/java.lang.reflect", "java.base/java.time",
+        "java.base/java.text", "java.management/sun.management", "java.desktop/java.awt.font").map { "--add-opens=$it=ALL-UNNAMED" }
 val subjects = providers.gradleProperty("benchmark.subjects").orElse("")
 
 dependencies {
@@ -25,6 +33,11 @@ dependencies {
     implementation(project(":dzdcache-spring-boot-starter"))
     implementation(libs.jmh.core)
     annotationProcessor(libs.jmh.generator)
+    implementation(libs.ignite.core)
+    implementation(libs.ignite.indexing)
+    implementation(libs.h2.ignite) { version { strictly(libs.versions.h2.ignite.get()) } }
+    implementation(libs.jedis) { version { strictly(libs.versions.jedis.get()) } }
+    implementation(libs.testcontainers)
     testImplementation(platform(libs.spring.boot.dependencies))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.junit.jupiter:junit-jupiter-params")
@@ -35,6 +48,7 @@ dependencies {
 tasks.test {
     dependsOn(":dzdcache-server:bootJar")
     systemProperty("dzdcache.server.jar", serverJar)
+    jvmArgs(igniteJvmArgs)
     maxHeapSize = "3g"
 }
 
@@ -43,6 +57,7 @@ fun JavaExec.benchmarkJvm() {
     javaLauncher = benchmarkJava
     dependsOn(":dzdcache-server:bootJar")
     jvmArgs("-Ddzdcache.server.jar=$serverJar")
+    jvmArgs(igniteJvmArgs)
     outputs.upToDateWhen { false }
     val dir = reports.get().asFile
     doFirst { dir.mkdirs() }

@@ -1,5 +1,8 @@
 [versions]
+h2-ignite = "1.4.197"
+ignite = "2.17.0"
 jackson = "3.1.5"
+jedis = "5.2.0"
 jmh = "1.37"
 maven-publish = "0.37.0"
 micrometer = "1.17.1"
@@ -8,7 +11,11 @@ spring-boot = "4.1.1"
 zdcache = "0.3.1"
 
 [libraries]
+h2-ignite = { module = "com.h2database:h2", version.ref = "h2-ignite" }
+ignite-core = { module = "org.apache.ignite:ignite-core", version.ref = "ignite" }
+ignite-indexing = { module = "org.apache.ignite:ignite-indexing", version.ref = "ignite" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
+jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
 jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
 jmh-generator = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }
 micrometer-core = { module = "io.micrometer:micrometer-core", version.ref = "micrometer" }
@@ -17,6 +24,7 @@ spring-boot-autoconfigure = { module = "org.springframework.boot:spring-boot-aut
 spring-boot-dependencies = { module = "org.springframework.boot:spring-boot-dependencies", version.ref = "spring-boot" }
 spring-boot-health = { module = "org.springframework.boot:spring-boot-health", version.ref = "spring-boot" }
 spring-boot-starter-jackson = { module = "org.springframework.boot:spring-boot-starter-jackson", version.ref = "spring-boot" }
+testcontainers = { module = "org.testcontainers:testcontainers" }
 zdcache = { module = "io.github.zdcache:zdcache", version.ref = "zdcache" }
 
 [plugins]
