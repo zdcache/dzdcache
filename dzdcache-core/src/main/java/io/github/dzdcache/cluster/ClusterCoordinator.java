@@ -605,7 +605,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             bootstrapping = noCluster;
             boolean best = answers.stream().allMatch(other -> ahead(other));
             if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
-                foundCluster(answers.stream().map(Message.Leader::self).toList());
+                foundWithReachable(answers.stream().map(Message.Leader::self).toList(), started);
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
@@ -619,6 +619,20 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
                 peerLogs.put(leader.self().id(), leader);
                 peerLogsAt = timers.now();
             }
+            decide.run();
+        }, error -> decide.run());
+    }
+
+    private void foundWithReachable(List<Member> answered, Member started) {
+        if (answered.isEmpty()) { foundCluster(List.of()); return; }
+        List<Member> reachable = new ArrayList<>();
+        int[] waiting = { answered.size() };
+        Runnable decide = () -> {
+            if (--waiting[0] > 0 || role != Role.STARTING || self != started || (reachable.size() + 1) * 2 <= size()) return;
+            foundCluster(answered.stream().filter(reachable::contains).toList());
+        };
+        for (Member member : answered) send(member.url(), new Message.WhoLeads(), reply -> {
+            if (reply instanceof Message.Leader leader && leader.self().id().equals(member.id())) reachable.add(member);
             decide.run();
         }, error -> decide.run());
     }
