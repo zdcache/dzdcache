@@ -39,6 +39,13 @@ public final class ClusterServer implements AutoCloseable {
         try (exchange) {
             if (!exchange.getRequestMethod().equals("POST")) { reply(exchange, 405, new byte[0]); return; }
             if (!authorized(exchange.getRequestHeaders().getFirst("Authorization"))) { reply(exchange, 401, new byte[0]); return; }
+            String protocol = exchange.getRequestHeaders().getFirst(Protocol.HEADER);
+            if (!String.valueOf(Protocol.VERSION).equals(protocol)) {
+                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+                reply(exchange, 409, ("This node speaks cluster protocol " + Protocol.VERSION + "; the request uses "
+                    + (protocol == null ? "none" : protocol)).getBytes(StandardCharsets.UTF_8));
+                return;
+            }
             byte[] body = exchange.getRequestBody().readNBytes(properties.getMaxSnapshotBytes() + 1);
             if (body.length > properties.getMaxSnapshotBytes()) { reply(exchange, 413, new byte[0]); return; }
             Message request;

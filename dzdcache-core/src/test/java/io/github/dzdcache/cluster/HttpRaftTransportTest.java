@@ -41,6 +41,28 @@ class HttpRaftTransportTest {
         } finally { server.stop(0); }
     }
 
+    @Test void sendsItsProtocolVersionAndExplainsAPeerThatSpeaksAnother() throws Exception {
+        var seen = new java.util.concurrent.atomic.AtomicReference<String>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.createContext("/internal/raft", exchange -> {
+            try (exchange) {
+                seen.set(exchange.getRequestHeaders().getFirst(Protocol.HEADER));
+                byte[] bytes = ("This node speaks cluster protocol 2; the request uses " + seen.get()).getBytes(StandardCharsets.UTF_8);
+                exchange.sendResponseHeaders(409, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            }
+        });
+        server.start();
+        try (var transport = new HttpRaftTransport(JsonMapper.builder().build(), new ServiceProperties())) {
+            assertThatThrownBy(() -> transport.send(uri(server), new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOf(IncompatiblePeerException.class)
+                .hasMessageContaining(uri(server).toString())
+                .hasMessageContaining("This node speaks cluster protocol 2; the request uses 1");
+            assertThat(seen.get()).isEqualTo("1");
+        } finally { server.stop(0); }
+    }
+
     @Test void rejectsOversizedRepliesAndErrorStatuses() throws Exception {
         HttpServer large = server(200, "{\"type\":\"ack\",\"padding\":\"" + "x".repeat(1024) + "\"}", Duration.ZERO);
         HttpServer failing = server(503, "unavailable", Duration.ZERO);

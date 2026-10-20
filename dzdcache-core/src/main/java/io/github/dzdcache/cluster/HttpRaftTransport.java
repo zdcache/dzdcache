@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.*;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
@@ -28,11 +29,14 @@ public final class HttpRaftTransport implements RaftTransport, AutoCloseable {
         try {
             request = HttpRequest.newBuilder(peer.resolve("/internal/raft")).timeout(timeout)
                 .header("Authorization", "Bearer " + properties.getClusterToken()).header("Content-Type", "application/json")
+                .header(Protocol.HEADER, String.valueOf(Protocol.VERSION))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(mapper.writeValueAsBytes(message))).build();
         } catch (RuntimeException e) { return CompletableFuture.failedFuture(e); }
         return http.sendAsync(request, info -> new LimitedBody(properties.getMaxSnapshotBytes()))
             .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
             .thenApply(response -> {
+                if (response.statusCode() == 409)
+                    throw new IncompatiblePeerException(peer, new String(response.body(), StandardCharsets.UTF_8));
                 if (response.statusCode() < 200 || response.statusCode() >= 300)
                     throw new IllegalStateException("Peer " + peer + " returned HTTP " + response.statusCode());
                 return mapper.readValue(response.body(), Message.class);
