@@ -35,6 +35,8 @@ final class SimulatedCluster {
     java.util.function.Function<String, java.util.function.Consumer<CacheEngine>> registrations = id -> engine -> { };
     private final PriorityQueue<Event> events = new PriorityQueue<>();
     private final Map<String, Integer> groups = new HashMap<>();
+    private final Set<String> cuts = new HashSet<>();
+    final Map<String, Witness> witnesses = new HashMap<>();
     private long now = 1_000_000;
     private long sequence;
 
@@ -145,11 +147,31 @@ final class SimulatedCluster {
         groups.put(id, next);
     }
 
-    void heal() { groups.replaceAll((id, group) -> 0); }
+    void heal() { groups.replaceAll((id, group) -> 0); cuts.clear(); }
+
+    void cut(String a, String b) { cuts.add(a.compareTo(b) < 0 ? a + "|" + b : b + "|" + a); }
+
+    Witness witness(String id) {
+        double rate = 1 + (skews.nextDouble() * 2 - 1) * maxClockSkew;
+        long created = now;
+        Witness witness = new Witness(new Timers() {
+            @Override public long now() { return now; }
+            @Override public long elapsed() { return created + (long) Math.floor((now - created) * rate); }
+            @Override public void execute(Runnable task) { task.run(); }
+            @Override public void schedule(long delayMillis, Runnable task) { }
+        });
+        witnesses.put(id, witness);
+        groups.putIfAbsent(id, 0);
+        properties.setWitnessUrl(URI.create("http://" + id + ":8080"));
+        return witness;
+    }
+
+    void crashWitness(String id) { witnesses.remove(id); }
 
     private boolean reachable(String from, String to) {
-        Node target = nodes.get(to);
-        return target != null && target.alive && Objects.equals(groups.get(from), groups.get(to));
+        boolean up = witnesses.containsKey(to) || (nodes.get(to) != null && nodes.get(to).alive);
+        String link = from.compareTo(to) < 0 ? from + "|" + to : to + "|" + from;
+        return up && Objects.equals(groups.get(from), groups.get(to)) && !cuts.contains(link);
     }
 
     private CompletableFuture<Message> deliver(Node from, URI peer, Message message) {
@@ -161,8 +183,8 @@ final class SimulatedCluster {
         at(latency, () -> {
             if (!from.alive) return;
             if (!reachable(from.id, to)) { at(timeout - latency, () -> reply.completeExceptionally(new IllegalStateException("unreachable"))); return; }
-            Node target = nodes.get(to);
-            target.coordinator.handle(mapper.readValue(wire, Message.class)).whenComplete((answer, error) -> at(1 + random.nextInt(4), () -> {
+            Witness witness = witnesses.get(to);
+            (witness != null ? witness.handle(mapper.readValue(wire, Message.class)) : nodes.get(to).coordinator.handle(mapper.readValue(wire, Message.class))).whenComplete((answer, error) -> at(1 + random.nextInt(4), () -> {
                 if (error != null) reply.completeExceptionally(error);
                 else if (!reachable(to, from.id)) reply.completeExceptionally(new IllegalStateException("reply lost"));
                 else reply.complete(mapper.readValue(mapper.writeValueAsBytes(answer), Message.class));

@@ -30,6 +30,8 @@ import java.util.List;
     @JsonSubTypes.Type(value = Message.AccessReport.class, name = "access-report"),
     @JsonSubTypes.Type(value = Message.LeaseRequest.class, name = "lease-request"),
     @JsonSubTypes.Type(value = Message.Lease.class, name = "lease"),
+    @JsonSubTypes.Type(value = Message.WitnessClaim.class, name = "witness-claim"),
+    @JsonSubTypes.Type(value = Message.WitnessGrant.class, name = "witness-grant"),
     @JsonSubTypes.Type(value = Message.Ack.class, name = "ack"),
     @JsonSubTypes.Type(value = Message.Refused.class, name = "refused")})
 public sealed interface Message {
@@ -55,6 +57,8 @@ public sealed interface Message {
     record AccessReport(List<Access> accesses) implements Message { }
     record LeaseRequest(long term, Member member, long appliedIndex) implements Message { }
     record Lease(long term, long millis, long ackedIndex) implements Message { }
+    record WitnessClaim(String clusterId, Member claimant, long term, long millis) implements Message { }
+    record WitnessGrant(boolean granted, Member holder, long term) implements Message { }
     record Ack() implements Message { }
     record Refused(int status, String message) implements Message { }
 }

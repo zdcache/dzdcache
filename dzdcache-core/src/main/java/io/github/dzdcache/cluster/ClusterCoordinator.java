@@ -101,6 +101,8 @@ public final class ClusterCoordinator implements AutoCloseable {
     private volatile long leaseIndex = Long.MAX_VALUE;
     private boolean leaseInFlight;
     private long sharedIndex;
+    private long witnessConfirmedAt = Long.MIN_VALUE / 2;
+    private boolean witnessInFlight;
     private long undoFrom;
     private String votedFor;
     private Set<String> votes = new HashSet<>();
@@ -538,6 +540,12 @@ public final class ClusterCoordinator implements AutoCloseable {
         meters.counter("dzdcache.elections").increment();
         if (elected()) { becomeMaster(now); return; }
         long electionTerm = term;
+        if (witnessed()) claimWitness(electionTerm, granted -> {
+            if (granted && role == Role.CANDIDATE && term == electionTerm) {
+                votes.add("witness");
+                if (elected()) becomeMaster(timers.now());
+            }
+        });
         Message.Vote request = new Message.Vote(electionTerm, self, log.lastIndex(), log.lastTerm(), memberIds());
         for (Member member : members) {
             if (member.id().equals(self.id())) continue;
@@ -557,6 +565,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private boolean elected() {
+        if (witnessed()) return votes.size() >= 2;
         return Quorum.reached(size(), members, votes) && (size() != 2 || votes.size() == 2 || syncedWithMaster);
     }
 
@@ -565,10 +574,11 @@ public final class ClusterCoordinator implements AutoCloseable {
         int rank = 0;
         for (Member member : members) if (member.olderThan(self)) rank++;
         long timeout = base + rank * base / 4 + random.nextLong(base / 2 + 1);
-        return size() == 2 && rank > 0 ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
+        return size() == 2 && rank > 0 && !witnessed() ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
     }
 
     private void becomeMaster(long now) {
+        if (!votes.contains("witness")) witnessConfirmedAt = Long.MIN_VALUE / 2;
         servingFrom = timers.elapsed() + leaseWait(properties.getReadLease().toMillis());
         noopIndex = log.lastIndex() + 1;
         masterLeaseUntil = Long.MIN_VALUE / 2;
@@ -595,6 +605,20 @@ public final class ClusterCoordinator implements AutoCloseable {
     }
 
     private static long leaseWait(long millis) { return millis + millis / 8; }
+
+    private boolean witnessed() { return size() == 2 && properties.getWitnessUrl() != null; }
+
+    private void claimWitness(long claimTerm, Consumer<Boolean> done) {
+        long sentAt = timers.elapsed();
+        long millis = properties.getReadLease().toMillis();
+        witnessInFlight = true;
+        send(properties.getWitnessUrl(), new Message.WitnessClaim(clusterId, self, claimTerm, millis), reply -> {
+            witnessInFlight = false;
+            boolean granted = reply instanceof Message.WitnessGrant grant && grant.granted();
+            if (granted && term == claimTerm) witnessConfirmedAt = Math.max(witnessConfirmedAt, sentAt);
+            done.accept(granted);
+        }, error -> { witnessInFlight = false; done.accept(false); });
+    }
 
     private boolean wins(long theirLastIndex, Member other) {
         return log.lastIndex() != theirLastIndex ? log.lastIndex() > theirLastIndex : self.olderThan(other);
@@ -632,6 +656,11 @@ public final class ClusterCoordinator implements AutoCloseable {
         Map<String, Long> confirmed = new HashMap<>();
         confirmed.put(self.id(), now);
         progress.forEach((id, p) -> confirmed.put(id, p.ackedSentAt));
+        if (witnessed()) {
+            long peer = progress.values().stream().mapToLong(p -> p.ackedSentAt).max().orElse(Long.MIN_VALUE / 2);
+            masterLeaseUntil = Math.max(peer, witnessConfirmedAt) + properties.getReadLease().toMillis();
+            return;
+        }
         List<Long> times = confirmed.values().stream().distinct().sorted(Comparator.reverseOrder()).toList();
         for (long time : times) {
             Set<String> ids = new HashSet<>();
@@ -677,7 +706,7 @@ public final class ClusterCoordinator implements AutoCloseable {
     private void acknowledge() {
         if (role != Role.MASTER) return;
         long now = timers.elapsed();
-        if (now < servingFrom) return;
+        if (now < servingFrom || now >= masterLeaseUntil) return;
         long limit = appliedIndex;
         for (Iterator<Holder> it = leases.values().iterator(); it.hasNext(); ) {
             Holder holder = it.next();
@@ -734,6 +763,7 @@ public final class ClusterCoordinator implements AutoCloseable {
             if (now - p.lastAck < properties.getElectionTimeout().toMillis() * 2) contacted.add(member.id());
             replicate(member, p);
         }
+        if (witnessed() && !witnessInFlight) claimWitness(term, granted -> { });
         advanceCommit();
         refreshMasterLease();
         acknowledge();

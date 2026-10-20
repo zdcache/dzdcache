@@ -224,6 +224,126 @@ class ClusterSimulationTest {
         assertThat(b.engine()).isSameAs(engine);
     }
 
+    private static SimulatedCluster witnessedPair(long seed) {
+        SimulatedCluster cluster = new SimulatedCluster(seed);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.witness("w");
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "Shared", 1))), 5_000))).isEqualTo(200);
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 5_000)).isTrue();
+        return cluster;
+    }
+    private static CompletableFuture<List<ClusterCoordinator.Outcome>> tracked(SimulatedCluster cluster, String via, long id, long revision) {
+        SimulatedCluster.Node node = cluster.nodes.get(via);
+        CompletableFuture<List<ClusterCoordinator.Outcome>> write = node.coordinator.putAsync(List.of(put(cluster, id, "From" + via, revision)));
+        write.thenAccept(outcomes -> { if (outcomes.getFirst().status() == 200) cluster.acknowledge(node, id, revision); });
+        return write;
+    }
+
+    @Test void withAWitnessABrokenLinkBetweenTwoNodesLeavesOneMasterAndLosesNoWrite() {
+        SimulatedCluster cluster = witnessedPair(19);
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        cluster.cut("a", "b");
+        cluster.run(8_000);
+        assertThat(cluster.mastersNow()).extracting(node -> node.id).containsExactly("a");
+        assertThat(b.coordinator.current()).as("the younger without the witness stops serving").isFalse();
+        assertThat(status(cluster.await(tracked(cluster, "a", 2, 1), 5_000))).isEqualTo(200);
+        assertThat(cluster.read(a, 2)).isEqualTo(1L);
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> b.coordinator.current() && revisions(b).containsKey(2L), 10_000)).isTrue();
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(a.meters.counter("dzdcache.two-node.reconciled").count() + b.meters.counter("dzdcache.two-node.reconciled").count()).isZero();
+    }
+
+    @Test void withAWitnessTheYoungerTakesOverWhenTheOlderCrashes() {
+        SimulatedCluster cluster = witnessedPair(20);
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        long crashedAt = cluster.now();
+        cluster.crash("a");
+        assertThat(cluster.runUntil(() -> b.coordinator.role() == ClusterCoordinator.Role.MASTER, 10_000)).isTrue();
+        assertThat(cluster.now() - crashedAt).as("takeover with a witness needs no two-node limit")
+            .isLessThan(cluster.properties.getTwoNodeTakeover().toMillis());
+        assertThat(status(cluster.await(tracked(cluster, "b", 2, 1), 5_000))).isEqualTo(200);
+        assertThat(cluster.read(b, 2)).isEqualTo(1L);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void withAWitnessAMasterCutOffFromBothStopsServingAndAcknowledging() {
+        SimulatedCluster cluster = witnessedPair(21);
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        cluster.isolate("a");
+        CompletableFuture<List<ClusterCoordinator.Outcome>> lost = tracked(cluster, "a", 2, 1);
+        assertThat(cluster.runUntil(() -> b.coordinator.role() == ClusterCoordinator.Role.MASTER, 10_000)).isTrue();
+        assertThat(a.coordinator.current()).isFalse();
+        cluster.runUntil(lost::isDone, 10_000);
+        assertThat(lost.isCompletedExceptionally() || status(lost.join()) != 200).as("the cut-off master acknowledged nothing").isTrue();
+        assertThat(status(cluster.await(tracked(cluster, "b", 3, 1), 5_000))).isEqualTo(200);
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1 && a.coordinator.current(), 10_000)).isTrue();
+        assertThat(cluster.read(a, 3)).isEqualTo(1L);
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aRestartedWitnessDoesNotDisturbAHealthyPairAndStillDecidesTheNextTakeover() {
+        SimulatedCluster cluster = witnessedPair(22);
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        SimulatedCluster.Node b = cluster.nodes.get("b");
+        cluster.crashWitness("w");
+        cluster.run(3_000);
+        assertThat(a.coordinator.current() && b.coordinator.current()).as("the pair serves without its witness").isTrue();
+        cluster.witness("w");
+        cluster.run(2_000);
+        cluster.crash("a");
+        assertThat(cluster.runUntil(() -> b.coordinator.role() == ClusterCoordinator.Role.MASTER && b.coordinator.current(), 10_000)).isTrue();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void randomFailuresOfAPairWithAWitnessNeverGiveTwoMastersOrAStaleRead() {
+        for (long seed = 400; seed < 412; seed++) {
+            SimulatedCluster cluster = new SimulatedCluster(seed);
+            TypeDescriptor students = cluster.students(100_000);
+            cluster.witness("w");
+            started(cluster, "a", "b");
+            cluster.await(cluster.nodes.get("a").coordinator.publishAsync(students), 5_000);
+            Random random = new Random(seed);
+            long[] revision = new long[20];
+            boolean witnessUp = true;
+            for (int step = 0; step < 300; step++) {
+                String target = random.nextBoolean() ? "a" : "b";
+                int action = random.nextInt(100);
+                if (action < 6) { if (cluster.nodes.get(target).alive) cluster.crash(target); }
+                else if (action < 12) { if (!cluster.nodes.get(target).alive) cluster.start(target); }
+                else if (action < 17) cluster.cut("a", "b");
+                else if (action < 21) cluster.isolate(target);
+                else if (action < 25) cluster.heal();
+                else if (action < 28) { if (witnessUp) cluster.crashWitness("w"); else cluster.witness("w"); witnessUp = !witnessUp; }
+                else {
+                    long id = random.nextInt(20);
+                    List<SimulatedCluster.Node> live = cluster.live();
+                    if (!live.isEmpty()) tracked(cluster, live.get(random.nextInt(live.size())).id, id, ++revision[(int) id]);
+                }
+                for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(20));
+                cluster.run(random.nextInt(500));
+            }
+            cluster.heal();
+            if (!witnessUp) cluster.witness("w");
+            for (String id : List.of("a", "b")) if (!cluster.nodes.get(id).alive) cluster.start(id);
+            cluster.run(30_000);
+            String label = "seed " + seed;
+            assertThat(cluster.violations).as(label).isEmpty();
+            assertThat(cluster.staleReads).as(label).isEmpty();
+            assertThat(cluster.mastersNow()).as(label).hasSize(1);
+            assertThat(cluster.live()).as(label).allMatch(node -> node.coordinator.ready());
+            assertIdentical(cluster);
+        }
+    }
+
     @Test void aJoiningNodeInstallsASnapshotWhenTheLogNoLongerReachesBack() {
         SimulatedCluster cluster = new SimulatedCluster(7);
         TypeDescriptor students = cluster.students(1_000);
