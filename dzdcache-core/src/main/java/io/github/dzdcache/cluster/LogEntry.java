@@ -7,7 +7,9 @@ import io.github.dzdcache.cache.EntryMutation;
 import io.github.dzdcache.cache.TypeDescriptor;
 import java.util.List;
 
-public record LogEntry(long index, long term, long at, Payload payload) {
+public record LogEntry(long index, long term, long at, Payload payload, int bytes) {
+    public LogEntry(long index, long term, long at, Payload payload) { this(index, term, at, payload, 0); }
+    LogEntry withBytes(int bytes) { return new LogEntry(index, term, at, payload, bytes); }
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
     @JsonSubTypes({
         @JsonSubTypes.Type(value = Publish.class, name = "publish"),

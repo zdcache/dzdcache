@@ -1,0 +1,9 @@
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/ClusterServerTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/ClusterSimulationTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/HttpRaftTransportTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/QuorumTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/ReplicatedLogTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/cluster/SimulatedCluster.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/discovery/KubernetesPeerDirectoryTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/discovery/StaticPeerDirectoryTest.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/test/java/io/github/dzdcache/typed/JacksonRootTypeTest.java

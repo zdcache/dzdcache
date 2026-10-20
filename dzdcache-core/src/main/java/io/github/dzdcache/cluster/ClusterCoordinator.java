@@ -472,8 +472,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
 
     private CompletableFuture<Result> appendLocal(LogEntry.Payload payload) {
         if (role != Role.MASTER) return CompletableFuture.failedFuture(new CacheException(503, "Not the master"));
-        LogEntry entry = new LogEntry(log.lastIndex() + 1, term, timers.now(), payload);
-        log.append(entry, size(entry));
+        LogEntry draft = new LogEntry(log.lastIndex() + 1, term, timers.now(), payload);
+        LogEntry entry = draft.withBytes(size(draft));
+        log.append(entry, entry.bytes());
         adopt(entry);
         CompletableFuture<Result> future = new CompletableFuture<>();
         pending.put(entry.index(), future);
@@ -1205,7 +1206,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
                 log.truncateFrom(entry.index());
                 configs.tailMap(entry.index(), true).clear();
             }
-            log.append(entry, size(entry));
+            log.append(entry, entry.bytes());
             adopt(entry);
         }
         installed = true;

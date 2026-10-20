@@ -1,0 +1,52 @@
+-J-Duser.language=
+-J-Duser.country=
+@options
+@packages
+--no-fonts
+--add-modules
+ALL-MODULE-PATH
+--module-path
+'/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-core/3.1.5/jackson-core-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-databind/3.1.5/jackson-databind-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/dzdcache-core-0.1.0-SNAPSHOT.jar'
+--patch-module
+io.github.dzdcache.core='/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/src/main/java:/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/generated-sources/annotations:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/github/zdcache/zdcache/0.3.1/zdcache-0.3.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-core/1.17.1/micrometer-core-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-commons/1.17.1/micrometer-commons-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-observation/1.17.1/micrometer-observation-1.17.1.jar'
+-encoding
+'UTF-8'
+-protected
+--release
+21
+-author
+-bottom
+'Copyright &#169; 2026. All rights reserved.'
+-charset
+'UTF-8'
+-d
+'/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs'
+-docencoding
+'UTF-8'
+-Xdoclint:all,-missing
+-doctitle
+'Distributed ZDCache core 0.1.0-SNAPSHOT API'
+-use
+-version
+-windowtitle
+'Distributed ZDCache core 0.1.0-SNAPSHOT API'
+io.github.dzdcache.cluster
+io.github.dzdcache.cache
+io.github.dzdcache.config
+io.github.dzdcache.discovery
+io.github.dzdcache.typed
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/constant-values.html = 1792426025352
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/tag-search-index.js = 1792426025481
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/overview-tree.html = 1792426025468
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/module-search-index.js = 1792426025479
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/index.html = 1792426025495
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/package-search-index.js = 1792426025480
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/serialized-form.html = 1792426025355
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/index-all.html = 1792426025493
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/allpackages-index.html = 1792426025479
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/member-search-index.js = 1792426025481
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/help-doc.html = 1792426025496
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/element-list = 1792426025333
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/search.html = 1792426025494
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/allclasses-index.html = 1792426025478
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/reports/apidocs/type-search-index.js = 1792426025480

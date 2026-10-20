@@ -1,0 +1,6 @@
+module:io.github.dzdcache.core
+io.github.dzdcache.cache
+io.github.dzdcache.cluster
+io.github.dzdcache.config
+io.github.dzdcache.discovery
+io.github.dzdcache.typed

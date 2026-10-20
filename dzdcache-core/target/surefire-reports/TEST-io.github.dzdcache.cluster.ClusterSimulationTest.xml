@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="io.github.dzdcache.cluster.ClusterSimulationTest" time="1.881" tests="14" errors="0" skipped="0" failures="0" flakes="0">
+  <properties>
+    <property name="java.specification.version" value="25"/>
+    <property name="sun.jnu.encoding" value="UTF-8"/>
+    <property name="java.class.path" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/test-classes:/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/classes:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/github/zdcache/zdcache/0.3.1/zdcache-0.3.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-databind/3.1.5/jackson-databind-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-core/3.1.5/jackson-core-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-core/1.17.1/micrometer-core-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-commons/1.17.1/micrometer-commons-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-observation/1.17.1/micrometer-observation-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/hdrhistogram/HdrHistogram/2.2.2/HdrHistogram-2.2.2.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter/6.0.3/junit-jupiter-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-api/6.0.3/junit-jupiter-api-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/platform/junit-platform-commons/6.0.3/junit-platform-commons-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-params/6.0.3/junit-jupiter-params-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-engine/6.0.3/junit-jupiter-engine-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/platform/junit-platform-engine/6.0.3/junit-platform-engine-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/assertj/assertj-core/3.27.7/assertj-core-3.27.7.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/net/bytebuddy/byte-buddy/1.18.11/byte-buddy-1.18.11.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/ch/qos/logback/logback-classic/1.5.38/logback-classic-1.5.38.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/ch/qos/logback/logback-core/1.5.38/logback-core-1.5.38.jar:"/>
+    <property name="java.vm.vendor" value="Oracle Corporation"/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="java.vendor.url" value="https://java.oracle.com/"/>
+    <property name="user.timezone" value="Europe/Oslo"/>
+    <property name="os.name" value="Mac OS X"/>
+    <property name="java.vm.specification.version" value="25"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="user.country" value="NO"/>
+    <property name="sun.boot.library.path" value="/Users/steinardragsnes/.sdkman/candidates/java/25.0.1-open/lib"/>
+    <property name="sun.java.command" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/surefire/surefirebooter-20261019180611737_3.jar /Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/surefire 2026-10-19T18-06-11_696-jvmRun1 surefire-20261019180611737_1tmp surefire_0-20261019180611737_2tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="surefire.test.class.path" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/test-classes:/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/classes:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/github/zdcache/zdcache/0.3.1/zdcache-0.3.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-databind/3.1.5/jackson-databind-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/com/fasterxml/jackson/core/jackson-annotations/2.21/jackson-annotations-2.21.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/tools/jackson/core/jackson-core/3.1.5/jackson-core-3.1.5.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-core/1.17.1/micrometer-core-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-commons/1.17.1/micrometer-commons-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/io/micrometer/micrometer-observation/1.17.1/micrometer-observation-1.17.1.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/hdrhistogram/HdrHistogram/2.2.2/HdrHistogram-2.2.2.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/slf4j/slf4j-api/2.0.18/slf4j-api-2.0.18.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter/6.0.3/junit-jupiter-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-api/6.0.3/junit-jupiter-api-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/platform/junit-platform-commons/6.0.3/junit-platform-commons-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-params/6.0.3/junit-jupiter-params-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/jupiter/junit-jupiter-engine/6.0.3/junit-jupiter-engine-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/junit/platform/junit-platform-engine/6.0.3/junit-platform-engine-6.0.3.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/org/assertj/assertj-core/3.27.7/assertj-core-3.27.7.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/net/bytebuddy/byte-buddy/1.18.11/byte-buddy-1.18.11.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/ch/qos/logback/logback-classic/1.5.38/logback-classic-1.5.38.jar:/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache/ch/qos/logback/logback-core/1.5.38/logback-core-1.5.38.jar:"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="/Users/steinardragsnes"/>
+    <property name="user.language" value="nb"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2025-10-21"/>
+    <property name="java.home" value="/Users/steinardragsnes/.sdkman/candidates/java/25.0.1-open"/>
+    <property name="file.separator" value="/"/>
+    <property name="basedir" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="apple.awt.application.name" value="ForkedBooter"/>
+    <property name="surefire.real.class.path" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core/target/surefire/surefirebooter-20261019180611737_3.jar"/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="25.0.1+8-27"/>
+    <property name="user.name" value="steinardragsnes"/>
+    <property name="stdout.encoding" value="UTF-8"/>
+    <property name="path.separator" value=":"/>
+    <property name="os.version" value="26.7"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
+    <property name="file.encoding" value="UTF-8"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="localRepository" value="/Users/steinardragsnes/dev/priv/java/dzdcache/.mvn-cache"/>
+    <property name="java.vendor.url.bug" value="https://bugreport.java.com/bugreport/"/>
+    <property name="java.io.tmpdir" value="/var/folders/bt/d4dpr66j489_4t3p925bpvyc0000gn/T/"/>
+    <property name="java.version" value="25.0.1"/>
+    <property name="user.dir" value="/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-core"/>
+    <property name="os.arch" value="aarch64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="native.encoding" value="UTF-8"/>
+    <property name="java.library.path" value="/Users/steinardragsnes/Library/Java/Extensions:/Library/Java/Extensions:/Network/Library/Java/Extensions:/System/Library/Java/Extensions:/usr/lib/java:."/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="stderr.encoding" value="UTF-8"/>
+    <property name="java.vendor" value="Oracle Corporation"/>
+    <property name="java.vm.version" value="25.0.1+8-27"/>
+    <property name="stdin.encoding" value="UTF-8"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeBig"/>
+    <property name="maven.repo.local" value=".mvn-cache"/>
+    <property name="java.class.version" value="69.0"/>
+  </properties>
+  <testcase name="withTwoNodesTheYoungerTakesOverWhenTheOlderDies" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.062">
+    <system-out><![CDATA[18:06:12.530 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:12.535 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:12.575 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- b is master for term 2
+]]></system-out>
+  </testcase>
+  <testcase name="anUnreachableFollowerLeavesTheInSyncSetAndCatchesUpAfterwards" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.037">
+    <system-out><![CDATA[18:06:12.583 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:12.585 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:12.615 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 4
+]]></system-out>
+  </testcase>
+  <testcase name="randomFailuresWithinTheToleratedCountKeepOneMasterPerTermAndLoseNoAcknowledgedWrite" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.934">
+    <system-out><![CDATA[18:06:12.621 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:12.622 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:12.707 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:12.759 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 3
+18:06:12.786 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:12.787 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:12.800 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:12.807 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 3
+18:06:12.808 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:12.812 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 7
+18:06:12.838 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 8
+18:06:12.838 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:12.842 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 12
+18:06:12.857 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 15
+18:06:12.877 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:12.878 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:12.903 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:12.924 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 3
+18:06:12.932 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 6
+18:06:12.934 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 8
+18:06:12.953 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:12.954 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:12.965 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:12.969 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 8
+18:06:12.976 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 9
+18:06:12.978 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 12
+18:06:13.012 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.013 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.037 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.062 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.063 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.079 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:13.079 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.080 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 3
+18:06:13.080 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.082 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 4
+18:06:13.110 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.111 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.117 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:13.118 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.130 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 5
+18:06:13.132 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 8
+18:06:13.136 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 13
+18:06:13.139 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 14
+18:06:13.139 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.140 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 15
+18:06:13.157 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.158 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.166 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.225 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.226 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.240 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:13.248 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 5
+18:06:13.277 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 8
+18:06:13.279 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 10
+18:06:13.287 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.288 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.333 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:13.353 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.354 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.364 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.365 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.368 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 6
+18:06:13.370 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 7
+18:06:13.371 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.375 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 11
+18:06:13.391 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 12
+18:06:13.407 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.407 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.418 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.426 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 5
+18:06:13.454 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.455 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.474 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:13.478 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 6
+18:06:13.491 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 7
+18:06:13.506 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.507 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.516 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 5
+18:06:13.525 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 7
+18:06:13.531 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 11
+18:06:13.535 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 15
+18:06:13.544 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 19
+18:06:13.546 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 23
+]]></system-out>
+  </testcase>
+  <testcase name="unboundedFailuresNeverGiveATermTwoMastersAndTheClusterRecovers" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.79">
+    <system-out><![CDATA[18:06:13.555 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.556 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.560 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.560 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 4
+18:06:13.561 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 7
+18:06:13.565 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.565 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.566 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:13.566 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 4
+18:06:13.569 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 9
+18:06:13.576 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.577 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.581 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.582 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 9
+18:06:13.585 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 11
+18:06:13.586 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.588 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.588 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.590 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:13.590 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.596 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.597 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.601 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 3
+18:06:13.606 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.606 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.614 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.615 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.620 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.620 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.622 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 2
+18:06:13.623 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.623 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.623 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 6
+18:06:13.632 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.632 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.641 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.641 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.642 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.643 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.643 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.650 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.650 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.654 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 7
+18:06:13.656 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.656 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.657 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.657 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 4
+18:06:13.659 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.659 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 9
+18:06:13.661 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.661 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n1, url=http://n1:8080, startedAt=1057332]
+18:06:13.662 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.662 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.662 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 11
+18:06:13.663 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n2, url=http://n2:8080, startedAt=1066021]
+18:06:13.668 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.669 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.672 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.673 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.673 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.674 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.674 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 3
+18:06:13.676 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.676 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 7
+18:06:13.678 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 8
+18:06:13.679 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.680 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 13
+18:06:13.686 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.687 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.691 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.691 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.692 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.692 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.693 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 3
+18:06:13.694 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 4
+18:06:13.694 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.695 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.695 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.695 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.696 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 3
+18:06:13.697 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 5
+18:06:13.704 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.704 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.711 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 4
+18:06:13.711 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.712 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 6
+18:06:13.713 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.713 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.714 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:13.715 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 5
+18:06:13.716 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n0, url=http://n0:8080, startedAt=1064596]
+18:06:13.717 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.717 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.717 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 6
+18:06:13.722 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.722 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.726 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.726 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.728 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:13.729 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 5
+18:06:13.731 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.731 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 6
+18:06:13.732 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 7
+18:06:13.732 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 14
+18:06:13.739 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.739 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.743 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.744 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 8
+18:06:13.749 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.749 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.760 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.761 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.767 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.767 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.768 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 2
+18:06:13.771 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 15
+18:06:13.777 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 16
+18:06:13.777 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.787 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.787 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.791 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 3
+18:06:13.794 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:13.795 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n2, url=http://n2:8080, startedAt=1020215]
+18:06:13.798 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.798 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.800 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n3, url=http://n3:8080, startedAt=1046063]
+18:06:13.801 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.801 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.811 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.812 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.823 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.823 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.833 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.834 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.846 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 1
+18:06:13.846 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n3
+18:06:13.856 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.857 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.863 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:13.863 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:13.866 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.866 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.867 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.867 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 3
+18:06:13.870 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n0, url=http://n0:8080, startedAt=1057607]
+18:06:13.883 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.883 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.887 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 8
+18:06:13.890 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 12
+18:06:13.891 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n3 lost contact with a quorum and steps down
+18:06:13.891 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 16
+18:06:13.892 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n3 lost contact with a quorum and steps down
+18:06:13.893 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 20
+18:06:13.904 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 26
+18:06:13.914 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.915 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.922 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 3
+18:06:13.925 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:13.930 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 13
+18:06:13.932 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:13.932 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 14
+18:06:13.933 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 17
+18:06:13.945 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.945 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.953 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.954 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 5
+18:06:13.959 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.959 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.959 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 2
+18:06:13.960 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.960 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 3
+18:06:13.970 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.970 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.973 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.975 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:13.975 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:13.979 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 5
+18:06:13.981 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 7
+18:06:13.982 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 11
+18:06:13.983 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.984 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 1
+18:06:13.984 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n3
+18:06:13.994 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:13.995 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:13.999 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:13.999 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 7
+18:06:14.002 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 8
+18:06:14.006 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 12
+18:06:14.008 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n2, url=http://n2:8080, startedAt=1030782]
+18:06:14.013 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:14.013 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:14.014 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n3, url=http://n3:8080, startedAt=1058258]
+18:06:14.015 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 2
+18:06:14.027 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.028 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.035 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:14.036 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 9
+18:06:14.042 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 16
+18:06:14.044 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:14.044 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 19
+18:06:14.052 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 21
+18:06:14.066 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.066 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.070 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:14.071 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:14.076 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 9
+18:06:14.078 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n4, url=http://n4:8080, startedAt=1023547]
+18:06:14.085 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:14.085 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:14.098 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.098 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.103 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:14.108 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n4 is master for term 1
+18:06:14.108 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n4
+18:06:14.112 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 4
+18:06:14.127 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.127 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.134 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 12
+18:06:14.135 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n3 lost contact with a quorum and steps down
+18:06:14.136 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n4, url=http://n4:8080, startedAt=1037360]
+18:06:14.136 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n1, url=http://n1:8080, startedAt=1037399]
+18:06:14.141 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 13
+18:06:14.141 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:14.155 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.155 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.167 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 2
+18:06:14.171 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 1
+18:06:14.171 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:14.172 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:14.173 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 5
+18:06:14.189 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.190 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.195 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 8
+18:06:14.197 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 11
+18:06:14.198 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n2 lost contact with a quorum and steps down
+18:06:14.199 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 14
+18:06:14.203 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 19
+18:06:14.210 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n4 is master for term 20
+18:06:14.212 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 21
+18:06:14.214 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 25
+18:06:14.227 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.227 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.235 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 6
+18:06:14.263 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 8
+18:06:14.264 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n4 is master for term 9
+18:06:14.264 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n4 lost contact with a quorum and steps down
+18:06:14.266 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 1
+18:06:14.266 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n1
+18:06:14.278 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.279 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.285 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 8
+18:06:14.287 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:14.287 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 12
+18:06:14.290 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n0 lost contact with a quorum and steps down
+18:06:14.290 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 16
+18:06:14.301 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n1 lost contact with a quorum and steps down
+18:06:14.301 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 18
+18:06:14.315 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n0 is master for term 1
+18:06:14.316 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n0
+18:06:14.323 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n2 is master for term 3
+18:06:14.323 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as n2
+18:06:14.326 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 6
+18:06:14.329 [main] WARN io.github.dzdcache.cluster.ClusterCoordinator -- n3 lost contact with a quorum and steps down
+18:06:14.329 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n3 is master for term 9
+18:06:14.332 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- n1 is master for term 19
+18:06:14.332 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- No longer a member; rejoining as Member[id=n3, url=http://n3:8080, startedAt=1066963]
+]]></system-out>
+  </testcase>
+  <testcase name="whenFourNodesSplitInHalfOnlyTheSideWithTheOldestKeepsAMaster" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.007">
+    <system-out><![CDATA[18:06:14.346 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.346 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="withTwoNodesAfterALinkFailureTheOlderNodesHistoryWins" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.007">
+    <system-out><![CDATA[18:06:14.353 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.353 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:14.354 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- b is master for term 2
+18:06:14.359 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- b installed a snapshot at index 6
+]]></system-out>
+  </testcase>
+  <testcase name="aSilentMemberIsRemovedOnlyWhileAtLeastThreeMembersRemain" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.008">
+    <system-out><![CDATA[18:06:14.360 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.360 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="aGracefulLeaveRemovesTheMemberAtOnce" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.002">
+    <system-out><![CDATA[18:06:14.369 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.370 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="aJoiningNodeInstallsASnapshotWhenTheLogNoLongerReachesBack" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.006">
+    <system-out><![CDATA[18:06:14.372 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.372 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:14.376 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- c installed a snapshot at index 55
+]]></system-out>
+  </testcase>
+  <testcase name="threeNodesElectTheOldestAndAcceptWritesThroughAnyNode" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.004">
+    <system-out><![CDATA[18:06:14.378 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.378 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="getsOnAFollowerDecideEvictionOnEveryNode" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.005">
+    <system-out><![CDATA[18:06:14.381 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.382 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="aMasterCrashFailsOverWithinSecondsAndKeepsEveryAcknowledgedWrite" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.005">
+    <system-out><![CDATA[18:06:14.387 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.387 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:14.390 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- b is master for term 2
+]]></system-out>
+  </testcase>
+  <testcase name="whenTwoOfThreeNodesRestartTogetherTheSurvivorLeadsThemBackWithItsData" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.005">
+    <system-out><![CDATA[18:06:14.392 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.392 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+]]></system-out>
+  </testcase>
+  <testcase name="javaTypesReplicateToTheNodesThatKnowThemAndAreSkippedElsewhere" classname="io.github.dzdcache.cluster.ClusterSimulationTest" time="0.005">
+    <system-out><![CDATA[18:06:14.397 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- a is master for term 1
+18:06:14.397 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- Founded a cluster as a
+18:06:14.401 [main] INFO io.github.dzdcache.cluster.ClusterCoordinator -- b is master for term 2
+]]></system-out>
+  </testcase>
+</testsuite>
