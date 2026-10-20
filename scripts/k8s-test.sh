@@ -57,7 +57,7 @@ step "kind cluster $CLUSTER"
 "$KIND" get clusters 2>/dev/null | grep -qx "$CLUSTER" || "$KIND" create cluster --name "$CLUSTER" --wait 120s
 kubectl config use-context "kind-$CLUSTER" >/dev/null
 step "image"
-docker build -q -t dzdcache:local . >/dev/null
+docker build --progress=plain -t dzdcache:local . >"$work/docker.log" 2>&1 || { tail -60 "$work/docker.log"; fail "the image did not build"; }
 "$KIND" load docker-image dzdcache:local --name "$CLUSTER" >/dev/null
 step "deploy"
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
