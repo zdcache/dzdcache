@@ -6,7 +6,13 @@ Every node accepts writes and forwards them to the elected master. The master ap
 
 There is no message broker or shared data store. Kubernetes, or a static peer list, is only read while a node starts, to find the cluster; after joining, the master keeps the membership. A Kubernetes Service request itself is not a broadcast.
 
-The cluster's size is configuration, not something nodes work out at runtime: `dzdcache.cluster-size` in Kubernetes (the StatefulSet's replicas), or the static peer list. Each node has a stable id (the pod name, or the self-url's host and port), so a restarted node takes back its own slot. Quorums are counted against the configured size, and a silent member keeps its slot until it returns; a node with an id beyond the configured size is refused.
+The cluster's size is part of its configuration, which lives in the log: a cluster is founded with `dzdcache.cluster-size` (in Kubernetes the StatefulSet's replicas) or the static peer list, and after that only an explicit resize changes it. Each node has a stable id (the pod name, or the self-url's host and port), so a restarted node takes back its own slot. Quorums are counted against the cluster's size, and a silent member keeps its slot until it returns; a node with an id beyond the size is refused until the cluster is resized.
+
+## Resizing
+
+A resize (`PUT /cache/cluster`, or `DistributedCache.resize` in the starter) changes the size while the cluster runs; to shrink, the caller names the members that leave. The master first appends a joint configuration that lists both the old and the new members and sizes, then, once that has committed, the new configuration alone. Each node uses the newest configuration in its log as soon as it has the entry, and while a configuration is joint, every commit, election and lease needs a quorum under both the old and the new size, so two masters cannot appear in one term during the change. A new master that inherits a joint configuration finishes the change; a resize whose joint entry never committed can vanish, and the caller gets 503 and may retry. The master keeps replicating to leaving members until they have the entry that removes them; they then stop serving and are refused if they try to rejoin.
+
+Growing needs a quorum of the new size from the nodes that are members: growing three nodes to five needs all three until the new nodes have joined, and each join counts as soon as it is replicated. The configured `cluster-size` is only used to found a cluster; a node configured with another size joins and adopts the cluster's size, and health reports the difference so the configuration can be updated before the next full start.
 
 ## Fresh reads
 

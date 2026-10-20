@@ -53,6 +53,16 @@ public class CacheController {
         if (!ServerTypeFactory.describes(type)) throw new CacheException(404, "Not a JSON specification");
         return mapper.treeToValue(type.definition(), SchemaDefinition.class);
     }
+    public record ResizeRequest(Integer size, List<String> leaving) {}
+    @GetMapping("/cluster") public ClusterCoordinator.ClusterView clusterView() {
+        cluster.requireReady();
+        return cluster.view();
+    }
+    @PutMapping("/cluster") public ClusterCoordinator.ClusterView resize(@RequestBody ResizeRequest request) {
+        if (request == null || request.size() == null) throw new IllegalArgumentException("A size is required");
+        cluster.resize(request.size(), java.util.Set.copyOf(request.leaving() == null ? List.of() : request.leaving()));
+        return cluster.view();
+    }
     public record IdentityRequest(String specification, int schemaVersion, JsonNode identity, List<String> fields) {}
     public record RemoveRequest(String specification, int schemaVersion, JsonNode identity, Long revision) {}
     public record SearchRequest(String specification, int schemaVersion, String dimension, JsonNode value, JsonNode from, JsonNode to,

@@ -28,11 +28,18 @@ request() {
   curl -s -o "$work/body" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' "$@"
 }
 metric() { curl -s "http://127.0.0.1:$1/actuator/prometheus" | awk -v m="$2" '$1==m {print $2}'; }
-forward_pods() { stop_forwards; for i in 0 1 2; do forward "pod/dzdcache-$i" $((18090 + i)); done; }
-master_pod() { for i in 0 1 2; do [[ "$(metric $((18090 + i)) dzdcache_master)" == "1.0" ]] && { echo "$i"; return; }; done; echo none; }
+PODS=3
+forward_pods() { stop_forwards; for i in $(seq 0 $((PODS - 1))); do forward "pod/dzdcache-$i" $((18090 + i)); done; }
+master_pod() { for i in $(seq 0 $((PODS - 1))); do [[ "$(metric $((18090 + i)) dzdcache_master)" == "1.0" ]] && { echo "$i"; return; }; done; echo none; }
+resize() {
+  local status
+  status=$(curl -s -o "$work/body" -w '%{http_code}' -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    http://127.0.0.1:18090/cache/cluster -d "$1")
+  [[ "$status" == 200 ]] || fail "resize $1 answered $status: $(cat "$work/body")"
+}
 every_pod_reads() {
   local id=$1 city=$2
-  for i in 0 1 2; do
+  for i in $(seq 0 $((PODS - 1))); do
     local status
     status=$(request "http://127.0.0.1:$((18090 + i))/cache/entries/get" -d "{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":$id}")
     [[ "$status" == 200 ]] && grep -q "\"$city\"" "$work/body" || fail "dzdcache-$i answered $status for $id: $(cat "$work/body")"
@@ -91,27 +98,32 @@ forward_pods
 every_pod_reads 7 Oslo
 every_pod_reads 21 Bergen
 
-step "a changed cluster-size is refused during a rollout"
+step "live resize from three pods to five"
+resize '{"size":5}'
 stop_forwards
-kubectl -n "$NS" set env statefulset/dzdcache DZDCACHE_CLUSTER_SIZE=5 >/dev/null
-for _ in $(seq 1 90); do
-  [[ "$(kubectl -n "$NS" get pod dzdcache-2 -o jsonpath='{.metadata.labels.controller-revision-hash}' 2>/dev/null)" != \
-     "$(kubectl -n "$NS" get statefulset dzdcache -o jsonpath='{.status.currentRevision}')" ]] && break
-  sleep 2
-done
-sleep 20
-[[ "$(kubectl -n "$NS" get pod dzdcache-2 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" != true ]] \
-  || fail "dzdcache-2 with cluster-size 5 became ready"
-forward pod/dzdcache-2 18092
-curl -s http://127.0.0.1:18092/actuator/health | grep -q "cluster-size 5" || echo "   (health details are not exposed; checked readiness only)"
-stop_forwards
-for i in 0 1; do
-  [[ "$(kubectl -n "$NS" get pod "dzdcache-$i" -o jsonpath='{.status.containerStatuses[0].ready}')" == true ]] || fail "dzdcache-$i stopped serving"
-done
-kubectl -n "$NS" rollout undo statefulset/dzdcache >/dev/null
-kubectl -n "$NS" delete pod dzdcache-2 >/dev/null
-ready 300s || fail "the cluster did not recover after the rollback"
+kubectl -n "$NS" scale statefulset dzdcache --replicas=5 >/dev/null
+ready 300s || fail "the StatefulSet did not reach five ready pods"
+PODS=5
 forward_pods
 every_pod_reads 7 Oslo
+every_pod_reads 21 Bergen
+put 22 Trondheim 18094
+every_pod_reads 22 Trondheim
+
+step "live resize back to three pods"
+resize '{"size":3,"leaving":["dzdcache-3","dzdcache-4"]}'
+for _ in $(seq 1 30); do
+  [[ "$(kubectl -n "$NS" get pod dzdcache-4 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" != true ]] && break
+  sleep 1
+done
+stop_forwards
+kubectl -n "$NS" scale statefulset dzdcache --replicas=3 >/dev/null
+ready 300s || fail "the StatefulSet did not settle on three pods"
+PODS=3
+forward_pods
+every_pod_reads 7 Oslo
+every_pod_reads 22 Trondheim
+request http://127.0.0.1:18090/cache/cluster >/dev/null
+grep -q '"size":3' "$work/body" || fail "the cluster does not report size 3: $(cat "$work/body")"
 
 echo "PASS: kind cluster $CLUSTER"

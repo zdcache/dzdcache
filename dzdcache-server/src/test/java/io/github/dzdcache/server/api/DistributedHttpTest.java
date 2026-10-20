@@ -39,6 +39,14 @@ class DistributedHttpTest {
             int a = pair.a(), b = pair.b(), clusterA = pair.clusterA(), clusterB = pair.clusterB();
             ready(first, second);
             assertThat(post(http, a, "/cache/schemas", SCHEMA, "client").statusCode()).isEqualTo(201);
+            var view = JSON.readTree(http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + a + "/cache/cluster"))
+                .header("Authorization", "Bearer client").GET().build(), HttpResponse.BodyHandlers.ofString()).body());
+            assertThat(view.path("size").asInt()).isEqualTo(2);
+            assertThat(view.path("members")).hasSize(2);
+            var shrink = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + b + "/cache/cluster")).header("Authorization", "Bearer client")
+                .header("Content-Type", "application/json").PUT(HttpRequest.BodyPublishers.ofString("{\"size\":1}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(shrink.statusCode()).isEqualTo(400);
+            assertThat(shrink.body()).contains("name the members that leave");
             assertThat(post(http, a, "/cache/entries", put(1, "Rome"), "client").statusCode()).isEqualTo(200);
             var found = eventually(http, b, "/cache/search", SEARCH, body -> body.contains("Rome"));
             assertThat(found.statusCode()).isEqualTo(200);

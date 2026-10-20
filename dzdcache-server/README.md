@@ -116,6 +116,8 @@ All entry and query paths are generic. The specification and version travel in t
 | `POST /cache/search` | Matching root graphs; 200 even when empty. An optional `limit` caps the count, and `fields` selects JSON Pointers to return instead of whole graphs. |
 | `POST /cache/entries/invalidate` | Newer revision tombstone; 204. |
 | `POST /cache/entries/evict` | Remove a matching revision on every member; 204. |
+| `GET /cache/cluster` | Size, members, master, and the previous size and members while a resize runs. |
+| `PUT /cache/cluster` | Resize while running: `{"size":5}`, or `{"size":3,"leaving":["dzdcache-3","dzdcache-4"]}` to shrink; 200 once the change is complete, 409 while another resize runs. |
 | `GET /actuator/health/readiness` | 200 when this node can serve fresh reads; 503 while joining or without a read lease. |
 | `GET /actuator/health/liveness` | Process health, independent of peer reachability. |
 | `GET /actuator/prometheus` | Metrics: search and get timers, search result sizes, mutation, election, snapshot and replication-failure counts, readiness, whether the node serves fresh reads, refused reads by reason, master, term, members, reachable members and configured size, replication lag per member, two-node reconciles, startup problems, applied log index, cached roots and revision records per schema. [monitoring/](../monitoring) has Prometheus alert rules and a Grafana dashboard. |
@@ -145,12 +147,12 @@ kubectl create secret generic dzdcache-auth \
 kubectl apply -f k8s/dzdcache.yaml
 ```
 
-Apply the Secret and manifests to the same namespace. `scripts/k8s-test.sh` runs the manifest on a local [kind](https://kind.sigs.k8s.io) cluster and checks a hard kill of the master pod, a rolling restart and a refused cluster-size change. The namespaced Role permits EndpointSlice list. A starting node lists the peer Service's EndpointSlices to find the cluster; once it has joined, the master keeps the membership and the Kubernetes API is not used.
+Apply the Secret and manifests to the same namespace. `scripts/k8s-test.sh` runs the manifest on a local [kind](https://kind.sigs.k8s.io) cluster and checks a hard kill of the master pod, a rolling restart, and a live resize from three pods to five and back. The namespaced Role permits EndpointSlice list. A starting node lists the peer Service's EndpointSlices to find the cluster; once it has joined, the master keeps the membership and the Kubernetes API is not used.
 
 - **`dzdcache:8080`** routes clients to ready pods.
 - **`dzdcache-peers`** is a separate headless Service with `publishNotReadyAddresses: true`. Joining nodes must be reachable for replication before becoming client-ready; readiness-filtered peers would create a bootstrap cycle.
 - The pods form a StatefulSet. Each pod's name is its node id, so a restarted pod takes back its slot, and `DZDCACHE_CLUSTER_SIZE` must equal `replicas`. The downward-API pod IP and UID allow self-exclusion.
-- Pods are created and replaced one at a time. A starting pod that finds no cluster reports ready so that the next pod can start, and the first two found the cluster together; a pod that rejoins an existing cluster reports ready only once it serves fresh reads, so a rolling restart never takes down more than one node. A pod configured with a different cluster size is refused, so changing the size means starting a new cluster.
+- Pods are created and replaced one at a time. A starting pod that finds no cluster reports ready so that the next pod can start, and the first two found the cluster together; a pod that rejoins an existing cluster reports ready only once it serves fresh reads, so a rolling restart never takes down more than one node. To resize, call `PUT /cache/cluster` and scale the StatefulSet: to grow, `{"size":5}` then `kubectl scale statefulset dzdcache --replicas=5`; to shrink, `{"size":3,"leaving":["dzdcache-3","dzdcache-4"]}` then `--replicas=3`, since the StatefulSet removes the highest ordinals. Update `DZDCACHE_CLUSTER_SIZE` afterwards for the next full start; the rolling restart that triggers is safe.
 - Probes separate cluster failure from process failure. Pods use a full JDK, run as non-root, and have a read-only filesystem with writable `/tmp`.
 
 The manifest does not install TLS or namespace authorization. Bearer tokens assume a trusted private network; use network policies and TLS/mTLS through your platform when needed. TLS on the cluster port itself is optional and off by default; see [Cluster TLS](../dzdcache-spring-boot-starter/README.md#cluster-tls). The shared API token grants all cache operations; there are no per-tenant ACLs. Building this project does not deploy it.
@@ -170,7 +172,7 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.replication-timeout` | 3 seconds |
 | `dzdcache.sync-interval` | 10 seconds |
 | `dzdcache.cluster-port` | 7070 |
-| `dzdcache.cluster-size` | static: the peer list plus this node; Kubernetes: required, equal to `replicas` |
+| `dzdcache.cluster-size` | the size a new cluster is founded with; static: the peer list plus this node; Kubernetes: required, equal to `replicas` |
 | `dzdcache.heartbeat-interval` | 200 milliseconds |
 | `dzdcache.election-timeout` | 1 second |
 | `dzdcache.read-lease` | 500 milliseconds |

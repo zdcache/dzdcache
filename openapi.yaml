@@ -41,6 +41,33 @@ paths:
                 type: array
                 items: {$ref: '#/components/schemas/SchemaDefinition'}
         default: {$ref: '#/components/responses/Error'}
+  /cache/cluster:
+    get:
+      operationId: getCluster
+      summary: The cluster's size and members, and a resize in progress
+      responses:
+        '200':
+          description: The cluster as this node knows it from its log
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ClusterView'}
+        default: {$ref: '#/components/responses/Error'}
+    put:
+      operationId: resizeCluster
+      summary: Change the cluster size while it runs
+      description: Grows or shrinks the cluster through a joint configuration, so quorums stay safe during the change. To shrink, name the members that leave. Answers once the change is complete; 409 while another resize runs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ResizeRequest'}
+      responses:
+        '200':
+          description: The cluster after the change
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ClusterView'}
+        default: {$ref: '#/components/responses/Error'}
   /cache/schemas/{id}/{version}:
     get:
       operationId: getSchema
@@ -307,6 +334,26 @@ components:
                     path: {type: string}
                     index: {type: string, enum: [exact, prefix, range]}
                     type: {type: string, enum: [string, integer, number, boolean, timestamp], description: Required without a schema and rejected with one.}
+    Member:
+      type: object
+      properties:
+        id: {type: string}
+        url: {type: string, format: uri}
+        startedAt: {type: integer, format: int64}
+    ClusterView:
+      type: object
+      properties:
+        size: {type: integer, minimum: 1}
+        members: {type: array, items: {$ref: '#/components/schemas/Member'}}
+        master: {$ref: '#/components/schemas/Member'}
+        previousSize: {type: [integer, 'null'], description: Set while a resize is in progress}
+        previousMembers: {type: [array, 'null'], items: {$ref: '#/components/schemas/Member'}}
+    ResizeRequest:
+      type: object
+      required: [size]
+      properties:
+        size: {type: integer, minimum: 1}
+        leaving: {type: array, items: {type: string}, description: Ids of the members that leave when shrinking}
     SchemaView:
       type: object
       required: [id, version, fingerprint, javaClass]

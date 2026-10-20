@@ -62,7 +62,7 @@ Values are converted with the service's `ObjectMapper` when there is exactly one
 | --- | --- |
 | `dzdcache.enabled` | `true` |
 | `dzdcache.discovery.mode` | `standalone`; also `static` or `kubernetes` |
-| `dzdcache.cluster-size` | static: the configured nodes; Kubernetes: required, equal to the replica count |
+| `dzdcache.cluster-size` | the size a new cluster is founded with; static: the configured nodes; Kubernetes: required, equal to the replica count |
 | `dzdcache.discovery.node-id` | static: the self-url's host:port; otherwise a random UUID |
 | `dzdcache.discovery.self-url` | `http://localhost:7070`, the URL other instances use for this one |
 | `dzdcache.discovery.static-peers` | empty |
@@ -117,6 +117,10 @@ spring:
 ```
 
 Peers are usually addressed by IP, and Kubernetes peers always are. With `verify-hostname: true` every node's certificate needs a subject alternative name for each address peers use, such as `IP:10.0.0.11`; a DNS name alone does not match an IP address. When pod IPs are not known in advance, set `verify-hostname: false`: the certificate chain, validity and key usage are still checked against the bundle's trust store, but the address is not matched against the certificate, so use a private CA that only issues cluster certificates.
+
+## Resizing
+
+`DistributedCache.resize(5)` grows a running cluster; start the new instances afterwards and they join. `DistributedCache.resize(3, "node-3", "node-4")` shrinks it, naming the instances that leave; stop them once the call returns. The change goes through a joint configuration, so quorums stay safe while it runs, and `DistributedCache.view()` shows the size, members and any resize in progress.
 
 ## Two instances and a witness
 
