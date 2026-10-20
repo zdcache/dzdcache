@@ -7,6 +7,7 @@ import java.net.http.*;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.web.server.PortInUseException;
 import org.springframework.context.ConfigurableApplicationContext;
 import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,10 +33,10 @@ class DistributedHttpTest {
     private static final String SEARCH = "{\"specification\":\"students\",\"schemaVersion\":1,\"dimension\":\"sex\",\"value\":\"female\"}";
 
     @Test void twoNodesReplicateThroughTheMasterAndTheSurvivorTakesOverWhenOneLeaves() throws Exception {
-        int a = port(), b = port(), clusterA = port(), clusterB = port();
         ConfigurableApplicationContext first = null, second = null;
         try (HttpClient http = HttpClient.newHttpClient()) {
-            first = node(a, clusterA, clusterB); second = node(b, clusterB, clusterA);
+            Pair pair = pair(); first = pair.first(); second = pair.second();
+            int a = pair.a(), b = pair.b(), clusterA = pair.clusterA(), clusterB = pair.clusterB();
             ready(first, second);
             assertThat(post(http, a, "/cache/schemas", SCHEMA, "client").statusCode()).isEqualTo(201);
             assertThat(post(http, a, "/cache/entries", put(1, "Rome"), "client").statusCode()).isEqualTo(200);
@@ -76,7 +77,7 @@ class DistributedHttpTest {
             var empty = post(http, b, "/cache/search", SEARCH, "client");
             assertThat(empty.statusCode()).isEqualTo(200); assertThat(empty.body()).isEqualTo("[]");
 
-            second.close(); second = node(b, clusterB, clusterA); ready(first, second);
+            second.close(); second = restart(b, clusterB, clusterA); ready(first, second);
             assertThat(post(http, b, "/cache/entries", put(1, "Rome"), "client").statusCode()).isEqualTo(200);
             assertThat(post(http, b, "/cache/entries/get", GET, "client").statusCode()).isEqualTo(404);
             assertThat(post(http, a, "/cache/entries", put(4, "Bergen"), "client").statusCode()).isEqualTo(200);
@@ -85,7 +86,7 @@ class DistributedHttpTest {
             first.close(); first = null;
             assertThat(post(http, b, "/cache/entries", put(5, "Trondheim"), "client").statusCode()).isEqualTo(200);
             assertThat(post(http, b, "/cache/entries/get", GET, "client").body()).contains("Trondheim");
-            first = node(a, clusterA, clusterB); ready(first, second);
+            first = restart(a, clusterA, clusterB); ready(first, second);
             assertThat(eventually(http, a, "/cache/entries/get", GET, body -> body.contains("Trondheim")).body()).contains("Trondheim");
             assertThat(post(http, a, "/cache/entries", put(6, "Tromsø"), "client").statusCode()).isEqualTo(200);
         } finally {
@@ -94,11 +95,11 @@ class DistributedHttpTest {
     }
 
     @Test void authPayloadLimitsAndFiniteTtlRetryWorkThroughHttp() throws Exception {
-        int port = port();
         try (var app = new SpringApplicationBuilder(DzdCacheApplication.class).run(
-                "--server.port=" + port, "--server.servlet.context-path=/test", "--dzdcache.api-token=client",
+                "--server.port=0", "--server.servlet.context-path=/test", "--dzdcache.api-token=client",
                 "--dzdcache.cluster-token=cluster", "--dzdcache.max-request-bytes=2048", "--logging.level.root=ERROR");
              HttpClient http = HttpClient.newHttpClient()) {
+            int port = app.getEnvironment().getRequiredProperty("local.server.port", Integer.class);
             assertThat(post(http, port, "/test/cache/schemas", SCHEMA, "wrong").statusCode()).isEqualTo(401);
             assertThat(post(http, port, "/test/cache;ignored=1/schemas", SCHEMA, "wrong").statusCode()).isEqualTo(401);
             assertThat(post(http, port, "/test/internal/raft", "{}", "client").statusCode()).as("cluster traffic is not served on the API port").isEqualTo(404);
@@ -132,6 +133,36 @@ class DistributedHttpTest {
                 .contains("dzdcache_entries{specification=\"students\",version=\"1\"} 2.0");
         }
     }
+    private record Pair(int a, int b, int clusterA, int clusterB,
+                        ConfigurableApplicationContext first, ConfigurableApplicationContext second) {}
+    private static Pair pair() throws Exception {
+        for (int attempt = 1; ; attempt++) {
+            int[] ports = ports(4);
+            ConfigurableApplicationContext first = null;
+            try {
+                first = node(ports[0], ports[2], ports[3]);
+                return new Pair(ports[0], ports[1], ports[2], ports[3], first, node(ports[1], ports[3], ports[2]));
+            } catch (RuntimeException exception) {
+                if (first != null) first.close();
+                if (attempt == 5 || !portInUse(exception)) throw exception;
+            }
+        }
+    }
+    private static ConfigurableApplicationContext restart(int port, int clusterPort, int peerClusterPort) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (true) {
+            try { return node(port, clusterPort, peerClusterPort); }
+            catch (RuntimeException exception) {
+                if (!portInUse(exception) || System.nanoTime() > deadline) throw exception;
+                Thread.sleep(200);
+            }
+        }
+    }
+    private static boolean portInUse(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause())
+            if (cause instanceof PortInUseException || cause instanceof BindException) return true;
+        return false;
+    }
     private static ConfigurableApplicationContext node(int port, int clusterPort, int peerClusterPort) {
         return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
             "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-" + port,
@@ -158,7 +189,16 @@ class DistributedHttpTest {
         }
         return response;
     }
-    private static int port() throws Exception { try (var socket = new ServerSocket(0)) { return socket.getLocalPort(); } }
+    private static int[] ports(int count) throws Exception {
+        ServerSocket[] sockets = new ServerSocket[count];
+        try {
+            int[] ports = new int[count];
+            for (int i = 0; i < count; i++) { sockets[i] = new ServerSocket(0); ports[i] = sockets[i].getLocalPort(); }
+            return ports;
+        } finally {
+            for (ServerSocket socket : sockets) if (socket != null) socket.close();
+        }
+    }
     private static String put(int revision, String city) {
         return "{\"specification\":\"students\",\"schemaVersion\":1,\"revision\":" + revision
             + ",\"value\":{\"id\":42,\"sex\":\"female\",\"address\":{\"city\":\"" + city + "\"}}}";
