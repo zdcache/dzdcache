@@ -73,6 +73,29 @@ class ClusterSimulationTest {
         assertThat(cluster.violations).isEmpty();
     }
 
+    @Test void writesAreTimedByStageAndByRoute() {
+        SimulatedCluster cluster = new SimulatedCluster(1);
+        TypeDescriptor students = cluster.students(100);
+        started(cluster, "a", "b", "c");
+        SimulatedCluster.Node a = master(cluster);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "Ann", 1))), 5_000))).isEqualTo(200);
+        assertThat(status(cluster.await(c.coordinator.putAsync(List.of(put(cluster, 2, "Bo", 1))), 5_000))).isEqualTo(200);
+
+        assertThat(a.meters.get("dzdcache.write.duration").tag("route", "master").timer().count()).isEqualTo(2);
+        assertThat(c.meters.get("dzdcache.write.duration").tag("route", "forwarded").timer().count()).isEqualTo(1);
+        assertThat(c.meters.get("dzdcache.write.duration").tag("route", "master").timer().count()).isZero();
+        assertThat(a.meters.get("dzdcache.write.stage").tag("stage", "commit").timer().count()).isGreaterThanOrEqualTo(3);
+        assertThat(a.meters.get("dzdcache.write.stage").tag("stage", "acknowledge").timer().count()).isGreaterThanOrEqualTo(3);
+        assertThat(c.meters.get("dzdcache.write.stage").timers()).allSatisfy(timer -> assertThat(timer.count()).isZero());
+        assertThat(a.meters.get("dzdcache.cluster.round-trip").tag("type", "Append").timer().count()).isPositive();
+        assertThat(c.meters.get("dzdcache.cluster.round-trip").tag("type", "ForwardPuts").timer().count()).isEqualTo(1);
+        assertThat(a.meters.get("dzdcache.cluster.handled").tag("type", "ForwardPuts").timer().count()).isEqualTo(1);
+        assertThat(c.meters.get("dzdcache.cluster.handled").tag("type", "Append").timer().count()).isPositive();
+        assertThat(a.meters.get("dzdcache.cluster.loop.delay").timer().count()).isPositive();
+    }
+
     @Test void aMasterCrashFailsOverWithinSecondsAndKeepsEveryAcknowledgedWrite() {
         SimulatedCluster cluster = new SimulatedCluster(2);
         TypeDescriptor students = cluster.students(1_000);

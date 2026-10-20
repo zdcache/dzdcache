@@ -8,9 +8,11 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.MultiGauge;
 import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.Timer;
 import java.net.URI;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -21,6 +23,8 @@ import java.util.random.RandomGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
+
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /** One master orders every change in a replicated log; members apply committed entries in log order. */
 public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
@@ -92,6 +96,14 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private final Set<String> inSync = new HashSet<>();
     private final Map<Long, CompletableFuture<Result>> pending = new HashMap<>();
     private final Map<Long, Result> results = new HashMap<>();
+    private final Map<Long, long[]> writeTimes = new HashMap<>();
+    private final Map<Class<?>, Timer> roundTrips = new ConcurrentHashMap<>();
+    private final Map<Class<?>, Timer> handled = new ConcurrentHashMap<>();
+    private final Timer loopDelay;
+    private final Timer committed;
+    private final Timer acknowledged;
+    private final Timer writtenOnMaster;
+    private final Timer writtenForwarded;
     private final Map<String, Holder> leases = new HashMap<>();
     private final List<Access> reported = new ArrayList<>();
     private final ArrayDeque<Change> changes = new ArrayDeque<>();
@@ -161,7 +173,18 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
         entries = MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters);
         revisions = MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters);
+        loopDelay = meters.timer("dzdcache.cluster.loop.delay");
+        committed = meters.timer("dzdcache.write.stage", "stage", "commit");
+        acknowledged = meters.timer("dzdcache.write.stage", "stage", "acknowledge");
+        writtenOnMaster = meters.timer("dzdcache.write.duration", "route", "master");
+        writtenForwarded = meters.timer("dzdcache.write.duration", "route", "forwarded");
     }
+
+    private Timer timer(Map<Class<?>, Timer> cache, String name, Message message) {
+        return cache.computeIfAbsent(message.getClass(), type -> meters.timer(name, "type", type.getSimpleName()));
+    }
+
+    private static long since(long nanos) { return System.nanoTime() - nanos; }
 
     public void start() {
         timers.execute(() -> {
@@ -260,7 +283,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     }
 
     @Override public CompletableFuture<Message> handle(Message message) {
-        return onLoop(() -> switch (message) {
+        long arrived = System.nanoTime();
+        CompletableFuture<Message> answer = onLoop(() -> switch (message) {
             case Message.Append append -> CompletableFuture.completedFuture(onAppend(append));
             case Message.Vote vote -> CompletableFuture.completedFuture(onVote(vote));
             case Message.SnapshotOffer offer -> CompletableFuture.completedFuture(onSnapshotOffer(offer));
@@ -282,6 +306,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             }
             default -> CompletableFuture.completedFuture(new Message.Refused(400, "Unexpected message"));
         });
+        answer.whenComplete((reply, error) -> timer(handled, "dzdcache.cluster.handled", message).record(since(arrived), NANOSECONDS));
+        return answer;
     }
 
     public void leave() {
@@ -323,7 +349,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
 
     private <T> CompletableFuture<T> onLoop(Supplier<CompletableFuture<T>> work) {
         CompletableFuture<T> result = new CompletableFuture<>();
+        long queued = System.nanoTime();
         timers.execute(() -> {
+            loopDelay.record(since(queued), NANOSECONDS);
             try { work.get().whenComplete((value, error) -> { if (error != null) result.completeExceptionally(error); else result.complete(value); }); }
             catch (RuntimeException e) { result.completeExceptionally(e); }
         });
@@ -345,41 +373,59 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         CompletableFuture<Message> reply;
         try { reply = transport.send(peer, message); }
         catch (RuntimeException e) { reply = CompletableFuture.failedFuture(e); }
-        reply.whenComplete((answer, error) -> timers.execute(() -> {
-            if (closed) return;
-            if (error != null) onFailure.accept(error);
-            else onReply.accept(answer);
-        }));
+        long sent = System.nanoTime();
+        reply.whenComplete((answer, error) -> {
+            long arrived = System.nanoTime();
+            if (error == null) timer(roundTrips, "dzdcache.cluster.round-trip", message).record(arrived - sent, NANOSECONDS);
+            timers.execute(() -> {
+                loopDelay.record(since(arrived), NANOSECONDS);
+                if (closed) return;
+                if (error != null) onFailure.accept(error);
+                else onReply.accept(answer);
+            });
+        });
     }
 
     private CompletableFuture<Result> submit(Message request) {
         CompletableFuture<Result> result = new CompletableFuture<>();
-        timers.execute(() -> submit(request, timers.now() + properties.getElectionTimeout().toMillis() * 2
-            + leaseWait(properties.getReadLease().toMillis()), result));
+        long started = System.nanoTime();
+        timers.execute(() -> {
+            loopDelay.record(since(started), NANOSECONDS);
+            submit(request, timers.now() + properties.getElectionTimeout().toMillis() * 2 + leaseWait(properties.getReadLease().toMillis()),
+                started, result);
+        });
         return result;
     }
 
-    private void submit(Message request, long deadline, CompletableFuture<Result> result) {
+    private void submit(Message request, long deadline, long started, CompletableFuture<Result> result) {
         if (closed) { result.completeExceptionally(new CacheException(503, "Node is stopping")); return; }
-        if (role == Role.MASTER) { relay(local(request), result); return; }
+        if (role == Role.MASTER) {
+            CompletableFuture<Result> written = local(request);
+            written.whenComplete((value, error) -> { if (error == null) writtenOnMaster.record(since(started), NANOSECONDS); });
+            relay(written, result);
+            return;
+        }
         Member current = master;
         if (current == null) {
             if (timers.now() >= deadline) result.completeExceptionally(new CacheException(503, "No master is elected"));
-            else timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, result));
+            else timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
             return;
         }
         send(current.url(), request, reply -> {
             switch (reply) {
-                case Message.Written written -> result.complete(new Result(written.view(), written.outcomes()));
+                case Message.Written written -> {
+                    writtenForwarded.record(since(started), NANOSECONDS);
+                    result.complete(new Result(written.view(), written.outcomes()));
+                }
                 case Message.Refused refused when refused.status() == 503 && timers.now() < deadline ->
-                    timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, result));
+                    timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
                 case Message.Refused refused -> result.completeExceptionally(new CacheException(refused.status(), refused.message()));
                 default -> result.completeExceptionally(new CacheException(503, "Unexpected reply from the master"));
             }
         }, error -> {
             if (timers.now() >= deadline) { result.completeExceptionally(new CacheException(503, "The master is unreachable")); return; }
             if (master == current) master = null;
-            timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, result));
+            timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
         });
     }
 
@@ -431,9 +477,11 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         adopt(entry);
         CompletableFuture<Result> future = new CompletableFuture<>();
         pending.put(entry.index(), future);
+        writeTimes.put(entry.index(), new long[] {System.nanoTime(), 0});
         timers.schedule(properties.getReplicationTimeout().toMillis() * 2, () -> {
             if (pending.remove(entry.index(), future)) {
                 results.remove(entry.index());
+                writeTimes.remove(entry.index());
                 future.completeExceptionally(new CacheException(503, "Write may be partially applied; retry the same revision and payload"));
             }
         });
@@ -776,6 +824,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             if (done.getKey() > limit) continue;
             it.remove();
             CompletableFuture<Result> future = pending.remove(done.getKey());
+            long[] times = writeTimes.remove(done.getKey());
+            if (times != null && times[1] != 0) acknowledged.record(since(times[1]), NANOSECONDS);
             if (future != null) finished.add(Map.entry(future, done.getValue()));
         }
         for (Map.Entry<CompletableFuture<Result>, Result> done : finished) done.getKey().complete(done.getValue());
@@ -805,6 +855,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         var failed = new ArrayList<>(pending.values());
         pending.clear();
         results.clear();
+        writeTimes.clear();
         for (var future : failed)
             future.completeExceptionally(new CacheException(503, "Write may be partially applied; retry the same revision and payload"));
     }
@@ -963,7 +1014,11 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             Result result = apply(entry);
             if (incarnation != before) return;
             appliedIndex = entry.index();
-            if (pending.containsKey(entry.index())) results.put(entry.index(), result);
+            if (pending.containsKey(entry.index())) {
+                results.put(entry.index(), result);
+                long[] times = writeTimes.get(entry.index());
+                if (times != null) { times[1] = System.nanoTime(); committed.record(times[1] - times[0], NANOSECONDS); }
+            }
         }
         acknowledge();
         changedCurrency();

@@ -16,7 +16,8 @@ val planArgs = plan.map {
     when (it) {
         "full" -> listOf("-f", "3", "-wi", "1", "-w", "600ms", "-i", "2", "-r", "300ms")
         "quick" -> listOf("-f", "1", "-wi", "1", "-w", "600ms", "-i", "2", "-r", "300ms")
-        else -> throw GradleException("benchmark.plan must be quick or full")
+        "custom" -> listOf()
+        else -> throw GradleException("benchmark.plan must be quick, full or custom")
     }
 }
 val extraArgs = providers.gradleProperty("jmh.args").map { it.split(" ").filter(String::isNotBlank) }.orElse(listOf())
@@ -117,4 +118,15 @@ tasks.register("compare") {
     description = "Runs the searches, key-value lookups, fresh reads and memory footprint, and writes report.md."
     group = "verification"
     dependsOn(jmh, freshReads, footprint, comparisonReport)
+}
+
+val writeBreakdown by tasks.registering(JavaExec::class) {
+    description = "Times each step of a dzdcache write, embedded and in Docker, and writes write-breakdown.md."
+    group = "verification"
+    benchmarkJvm()
+    mainClass = "io.github.dzdcache.benchmark.WriteBreakdown"
+    jvmArgs(providers.gradleProperty("benchmark.jvmArgs").map { it.split(" ").filter(String::isNotBlank) }.orElse(listOf()).get())
+    args(listOf(reports.get().file("write-breakdown.md").asFile.absolutePath, subjects.get(),
+        providers.gradleProperty("benchmark.seconds").orElse("10").get(),
+        providers.gradleProperty("benchmark.threads").orElse("4").get()))
 }

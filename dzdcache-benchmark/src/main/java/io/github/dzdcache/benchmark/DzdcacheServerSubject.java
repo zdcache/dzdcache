@@ -12,6 +12,9 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -19,7 +22,9 @@ import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-public final class DzdcacheServerSubject implements DistributedSubject {
+public final class DzdcacheServerSubject implements DistributedSubject, TimedWrites {
+    private static final Pattern TIMER = Pattern.compile("^(dzdcache_\\w+?)_seconds_(count|sum)(?:\\{([^}]*)})? (\\S+)$");
+    private static final Pattern TAG = Pattern.compile("(\\w+)=\"([^\"]*)\"");
     private static final String TOKEN = "benchmark";
     private final JsonMapper json = JsonMapper.builder().build();
     private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
@@ -133,6 +138,39 @@ public final class DzdcacheServerSubject implements DistributedSubject {
         return search(Map.of("dimension", "cityAge", "value", List.of(city), "from", from, "to", to));
     }
     @Override public List<Person> byTag(String tag) { return search(Map.of("dimension", "tags", "value", tag)); }
+    private String get(int port, String path) {
+        try {
+            HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create("http://" + host + ":" + port + path))
+                .header("Authorization", "Bearer " + TOKEN).timeout(Duration.ofSeconds(10)).GET().build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) throw new IllegalStateException(path + " returned " + response.statusCode());
+            return response.body();
+        } catch (IOException e) { throw new UncheckedIOException(e); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+    }
+    @Override public List<Map<String, Totals>> timersPerNode() {
+        List<Map<String, Totals>> nodes = new ArrayList<>();
+        for (int port : ports) nodes.add(timers(get(port, "/actuator/prometheus")));
+        return nodes;
+    }
+    static Map<String, Totals> timers(String prometheus) {
+        Map<String, double[]> sums = new TreeMap<>();
+        for (String line : prometheus.split("\n")) {
+            Matcher timer = TIMER.matcher(line);
+            if (!timer.matches()) continue;
+            Map<String, String> tags = new TreeMap<>();
+            Matcher tag = TAG.matcher(timer.group(3) == null ? "" : timer.group(3));
+            while (tag.find()) tags.put(tag.group(1), tag.group(2));
+            double[] totals = sums.computeIfAbsent(TimedWrites.key(timer.group(1), tags), key -> new double[2]);
+            totals[timer.group(2).equals("count") ? 0 : 1] = Double.parseDouble(timer.group(4));
+        }
+        Map<String, Totals> timers = new TreeMap<>();
+        sums.forEach((key, totals) -> timers.put(key, new Totals(totals[0], totals[1])));
+        return timers;
+    }
+    @Override public int masterNode() {
+        String master = json.readTree(get(ports[0], "/cache/cluster")).path("master").path("id").asString();
+        return master.startsWith("server-") ? Integer.parseInt(master.substring("server-".length())) : -1;
+    }
     @Override public void close() {
         containers.forEach(GenericContainer::stop);
         network.close();

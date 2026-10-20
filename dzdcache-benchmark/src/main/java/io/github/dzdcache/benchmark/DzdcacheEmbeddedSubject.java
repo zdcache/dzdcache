@@ -8,9 +8,18 @@ import io.github.dzdcache.spring.DistributedCache;
 import io.github.zdcache.IdentityDimension;
 import io.github.zdcache.SearchSpecification;
 import io.github.zdcache.ValueRange;
+import io.micrometer.core.instrument.Meter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.WebApplicationType;
@@ -19,12 +28,13 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
 
-public final class DzdcacheEmbeddedSubject implements DistributedSubject {
+public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedWrites {
     @SpringBootConfiguration @EnableAutoConfiguration
     public static class Node {
         @Bean CacheType<Person, Long> people(@Value("${benchmark.capacity}") int capacity) {
             return CacheType.of("people", 1, Long.class, specification()).capacity(capacity);
         }
+        @Bean MeterRegistry meters() { return new SimpleMeterRegistry(); }
     }
 
     static SearchSpecification<Person, Long> specification() {
@@ -84,5 +94,20 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject {
         return second.search("cityAge", city, ValueRange.between(from, to));
     }
     @Override public List<Person> byTag(String tag) { return second.search("tags", tag); }
+    @Override public List<Map<String, Totals>> timersPerNode() {
+        return nodes.stream().map(node -> {
+            Map<String, Totals> timers = new TreeMap<>();
+            for (Meter meter : node.getBean(MeterRegistry.class).getMeters()) {
+                if (!(meter instanceof Timer timer) || !timer.getId().getName().startsWith("dzdcache.")) continue;
+                Map<String, String> tags = timer.getId().getTags().stream().collect(Collectors.toMap(Tag::getKey, Tag::getValue));
+                timers.put(TimedWrites.key(timer.getId().getName(), tags), new Totals(timer.count(), timer.totalTime(TimeUnit.SECONDS)));
+            }
+            return timers;
+        }).toList();
+    }
+    @Override public int masterNode() {
+        for (int i = 0; i < nodes.size(); i++) if (nodes.get(i).getBean(ClusterCoordinator.class).role() == ClusterCoordinator.Role.MASTER) return i;
+        return -1;
+    }
     @Override public void close() { nodes.forEach(ConfigurableApplicationContext::close); }
 }
