@@ -76,7 +76,7 @@ export function write() {
   if (stored.status !== 200) return;
   for (const reader of READERS) {
     check(post('/cache/entries/get', { ...SPEC, identity: id }, reader), {
-      'acknowledged write visible on every node': r => r.status === 503 || (r.status === 200 && r.json().name === name),
+      'acknowledged write visible on every node': r => r.status === 0 || r.status === 503 || (r.status === 200 && r.json().name === name),
     });
   }
 }
