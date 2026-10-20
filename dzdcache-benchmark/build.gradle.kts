@@ -7,7 +7,9 @@ description = "Benchmarks dzdcache against other distributed caches; not publish
 val benchmarkJava = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(providers.gradleProperty("benchmark.java").orElse("25").get().toInt())
 }
-val serverJar = project(":dzdcache-server").layout.buildDirectory.file("libs/dzdcache-server.jar").get().asFile.absolutePath
+val publishedImage = providers.gradleProperty("benchmark.serverImage").orElse("")
+val serverImage = publishedImage.get().ifBlank { "dzdcache-server:benchmark" }
+val repository = rootDir.absolutePath
 val reports = layout.buildDirectory.dir("reports/dzdcache-benchmark")
 val plan = providers.gradleProperty("benchmark.plan").orElse("quick")
 val planArgs = plan.map {
@@ -51,9 +53,16 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+val buildServerImage by tasks.registering(Exec::class) {
+    description = "Builds the dzdcache server image from this repository for the machine's own architecture."
+    val usePublished = publishedImage.get().isNotBlank()
+    onlyIf { !usePublished }
+    commandLine("docker", "build", "-q", "-t", "dzdcache-server:benchmark", repository)
+}
+
 tasks.test {
-    dependsOn(":dzdcache-server:bootJar")
-    systemProperty("dzdcache.server.jar", serverJar)
+    dependsOn(buildServerImage)
+    systemProperty("dzdcache.server.image", serverImage)
     jvmArgs(igniteJvmArgs)
     maxHeapSize = "3g"
 }
@@ -61,8 +70,8 @@ tasks.test {
 fun JavaExec.benchmarkJvm() {
     classpath = sourceSets.main.get().runtimeClasspath
     javaLauncher = benchmarkJava
-    dependsOn(":dzdcache-server:bootJar")
-    jvmArgs("-Ddzdcache.server.jar=$serverJar")
+    dependsOn(buildServerImage)
+    jvmArgs("-Ddzdcache.server.image=$serverImage")
     jvmArgs(igniteJvmArgs)
     outputs.upToDateWhen { false }
     val dir = reports.get().asFile

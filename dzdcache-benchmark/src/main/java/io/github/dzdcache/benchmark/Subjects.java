@@ -25,7 +25,9 @@ public final class Subjects {
 
     public static List<String> names() { return List.copyOf(FACTORIES.keySet()); }
 
-    public static boolean available(String name) { return !name.equals(REDIS_STACK) || RedisStackSubject.available(); }
+    public static boolean available(String name) { return !inDocker(name) || RedisStackSubject.available(); }
+
+    public static boolean inDocker(String name) { return name.equals(REDIS_STACK) || name.equals(DZDCACHE_SERVER); }
 
     public static DistributedSubject create(String name, int capacity) {
         IntFunction<DistributedSubject> factory = FACTORIES.get(name);

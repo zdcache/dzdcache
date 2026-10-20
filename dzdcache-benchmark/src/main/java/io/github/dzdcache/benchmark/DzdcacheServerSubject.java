@@ -6,14 +6,16 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -21,30 +23,32 @@ public final class DzdcacheServerSubject implements DistributedSubject {
     private static final String TOKEN = "benchmark";
     private final JsonMapper json = JsonMapper.builder().build();
     private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
-    private final List<Process> processes = new ArrayList<>();
-    private final int[] ports;
+    private final Network network = Network.newNetwork();
+    private final List<GenericContainer<?>> containers = new ArrayList<>();
+    private final String image;
+    private int[] ports = new int[0];
+    private String host = "localhost";
 
     public DzdcacheServerSubject(int capacity) {
-        Path jar = Path.of(System.getProperty("dzdcache.server.jar", "../dzdcache-server/build/libs/dzdcache-server.jar")).toAbsolutePath();
-        if (!Files.exists(jar)) throw new IllegalStateException("Build the server first: " + jar + " does not exist");
-        ports = Ports.free(3);
-        int[] cluster = Ports.free(3);
-        String java = ProcessHandle.current().info().command().orElse("java");
+        image = System.getProperty("dzdcache.server.image", "dzdcache-server:benchmark");
         try {
-            Path logs = Files.createTempDirectory("dzdcache-benchmark-server");
             for (int i = 0; i < 3; i++) {
                 List<String> peers = new ArrayList<>();
-                for (int j = 0; j < 3; j++) if (j != i) peers.add("http://127.0.0.1:" + cluster[j]);
-                ProcessBuilder builder = new ProcessBuilder(java, "-Xmx1g", "-jar", jar.toString(), "--server.port=" + ports[i],
-                    "--dzdcache.cluster-port=" + cluster[i], "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=server-" + i,
-                    "--dzdcache.discovery.self-url=http://127.0.0.1:" + cluster[i], "--dzdcache.discovery.static-peers=" + String.join(",", peers),
-                    "--dzdcache.api-token=" + TOKEN, "--dzdcache.cluster-token=benchmark-cluster", "--dzdcache.max-search-results=1000000",
-                    "--logging.level.root=WARN");
-                builder.environment().remove("JAVA_TOOL_OPTIONS");
-                builder.redirectErrorStream(true).redirectOutput(logs.resolve("server-" + i + ".log").toFile());
-                processes.add(builder.start());
+                for (int j = 0; j < 3; j++) if (j != i) peers.add("http://server-" + j + ":7070");
+                GenericContainer<?> container = new GenericContainer<>(DockerImageName.parse(image)).withNetwork(network)
+                    .withNetworkAliases("server-" + i).withExposedPorts(8080)
+                    .withEnv("DZDCACHE_DISCOVERY_MODE", "static").withEnv("DZDCACHE_DISCOVERY_NODE_ID", "server-" + i)
+                    .withEnv("DZDCACHE_DISCOVERY_SELF_URL", "http://server-" + i + ":7070")
+                    .withEnv("DZDCACHE_DISCOVERY_STATIC_PEERS", String.join(",", peers))
+                    .withEnv("DZDCACHE_API_TOKEN", TOKEN).withEnv("DZDCACHE_CLUSTER_TOKEN", "benchmark-cluster")
+                    .withEnv("DZDCACHE_MAX_SEARCH_RESULTS", "1000000").withEnv("LOGGING_LEVEL_ROOT", "WARN")
+                    .waitingFor(Wait.forHttp("/actuator/health/liveness").forPort(8080).withStartupTimeout(Duration.ofMinutes(2)));
+                containers.add(container);
             }
-        } catch (IOException e) { throw new UncheckedIOException(e); }
+            containers.parallelStream().forEach(GenericContainer::start);
+        } catch (RuntimeException e) { close(); throw e; }
+        ports = containers.stream().mapToInt(container -> container.getMappedPort(8080)).toArray();
+        host = containers.getFirst().getHost();
         Waits.until("the dzdcache servers have formed a cluster", () -> Arrays.stream(ports).allMatch(port -> status(port, "/cache/cluster") == 200));
         Map<String, Object> definition = new LinkedHashMap<>();
         definition.put("id", "people");
@@ -65,7 +69,7 @@ public final class DzdcacheServerSubject implements DistributedSubject {
 
     private int status(int port, String path) {
         try {
-            return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).header("Authorization", "Bearer " + TOKEN)
+            return http.send(HttpRequest.newBuilder(URI.create("http://" + host + ":" + port + path)).header("Authorization", "Bearer " + TOKEN)
                 .timeout(Duration.ofSeconds(5)).GET().build(), HttpResponse.BodyHandlers.discarding()).statusCode();
         } catch (IOException e) { return -1; }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); return -1; }
@@ -73,7 +77,7 @@ public final class DzdcacheServerSubject implements DistributedSubject {
 
     private HttpResponse<byte[]> post(int port, String path, Object body) {
         try {
-            return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).header("Authorization", "Bearer " + TOKEN)
+            return http.send(HttpRequest.newBuilder(URI.create("http://" + host + ":" + port + path)).header("Authorization", "Bearer " + TOKEN)
                 .header("Content-Type", "application/json").timeout(Duration.ofSeconds(30))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(body))).build(), HttpResponse.BodyHandlers.ofByteArray());
         } catch (IOException e) { throw new UncheckedIOException(e); }
@@ -103,7 +107,8 @@ public final class DzdcacheServerSubject implements DistributedSubject {
     @Override public int nodesInThisJvm() { return 0; }
 
     @Override public String settings() {
-        return "3 dzdcache server processes; JSON over HTTP/1.1 from java.net.http to server 2; JSON-only registration with the same dimensions";
+        return "3 dzdcache server containers (" + image + ") on a Docker network; JSON over HTTP/1.1 from java.net.http to server 2 "
+            + "through Docker's port mapping; JSON-only registration with the same dimensions";
     }
     @Override public void load(Person[] people) {
         for (int start = 0; start < people.length; start += 1_000) {
@@ -129,11 +134,8 @@ public final class DzdcacheServerSubject implements DistributedSubject {
     }
     @Override public List<Person> byTag(String tag) { return search(Map.of("dimension", "tags", "value", tag)); }
     @Override public void close() {
-        processes.forEach(Process::destroy);
-        for (Process process : processes) {
-            try { if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly(); }
-            catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
-        }
+        containers.forEach(GenericContainer::stop);
+        network.close();
         http.close();
     }
 }
