@@ -280,4 +280,18 @@ class JsonTypeTest {
             List.of(new DimensionDefinition("name", "/name", "exact")), 1, "infinite")).kind()).isEqualTo(TypeDescriptor.JSON_SCHEMA);
         assertThatThrownBy(() -> new JsonType(simple, mapper)).hasMessageContaining("without a schema");
     }
+
+    private static String wide(int elements) { return "{\"id\":1,\"tags\":[" + "0,".repeat(elements - 1) + "0]}"; }
+    private static String deep(int depth) { return "{\"id\":1,\"n\":" + "{\"n\":".repeat(depth - 1) + "{}" + "}".repeat(depth); }
+
+    @Test void rootsAreLimitedToTheSchemaKindsNodeCountAndNesting() {
+        JsonType type = type(dimension("tag", "/tags/*", "exact", "integer"));
+        int elements = CompiledSchema.MAX_VALUE_NODES - 3;
+        assertThat(type.read(json(wide(elements))).identity()).isEqualTo(1L);
+        assertThatThrownBy(() -> type.read(json(wide(elements + 1))))
+            .isInstanceOf(IllegalArgumentException.class).hasMessage("Object graph exceeds size or nesting limits");
+        assertThat(type.read(json(deep(CompiledSchema.MAX_VALUE_DEPTH))).identity()).isEqualTo(1L);
+        assertThatThrownBy(() -> type.read(json(deep(CompiledSchema.MAX_VALUE_DEPTH + 1))))
+            .isInstanceOf(IllegalArgumentException.class).hasMessage("Object graph exceeds size or nesting limits");
+    }
 }

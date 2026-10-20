@@ -18,7 +18,8 @@ import io.github.dzdcache.server.schema.RuntimeSchemaCompiler.Property;
 
 /** Immutable schema metadata; root instances are compiled Java classes with typed fields. */
 public final class CompiledSchema {
-    private static final int MAX_VALUE_NODES = 100_000;
+    static final int MAX_VALUE_NODES = 100_000;
+    static final int MAX_VALUE_DEPTH = 64;
     private final ObjectMapper mapper;
     private final Node root;
     private final Class<Object> rootClass;
@@ -325,10 +326,15 @@ public final class CompiledSchema {
     }
 
     private static IllegalArgumentException invalid(String message) { return RuntimeSchemaCompiler.invalid(message); }
-    private static final class Budget {
+    static final class Budget {
         int nodes;
         void consume(int depth) {
-            if (++nodes > MAX_VALUE_NODES || depth > 64) throw invalid("Object graph exceeds size or nesting limits");
+            if (++nodes > MAX_VALUE_NODES || depth > MAX_VALUE_DEPTH) throw invalid("Object graph exceeds size or nesting limits");
+        }
+        static void check(JsonNode json) { new Budget().walk(json, 0); }
+        private void walk(JsonNode json, int depth) {
+            consume(depth);
+            for (JsonNode child : json) walk(child, depth + 1);
         }
     }
 }

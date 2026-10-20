@@ -357,6 +357,7 @@ public final class JsonType implements RootType<JsonRoot> {
     @Override public JsonNode writeIdentity(Object identity) { return mapper.valueToTree(identity); }
     @Override public JsonRoot read(JsonNode value) {
         if (value == null || !value.isObject()) throw invalid("A JSON root object is required");
+        CompiledSchema.Budget.check(value);
         Object id = identityValue(at(value, identity, definition.identity()));
         Object[] values = slots.isEmpty() ? NO_VALUES : new Object[slots.size()];
         for (int i = 0; i < values.length; i++) values[i] = slots.get(i).extract(value);
