@@ -1,6 +1,8 @@
 [versions]
 h2-ignite = "1.4.197"
+hazelcast = "5.7.0"
 ignite = "2.17.0"
+infinispan = "15.2.6.Final"
 jackson = "3.1.5"
 jedis = "5.2.0"
 jmh = "1.37"
@@ -12,8 +14,13 @@ zdcache = "0.3.1"
 
 [libraries]
 h2-ignite = { module = "com.h2database:h2", version.ref = "h2-ignite" }
+hazelcast = { module = "com.hazelcast:hazelcast", version.ref = "hazelcast" }
 ignite-core = { module = "org.apache.ignite:ignite-core", version.ref = "ignite" }
 ignite-indexing = { module = "org.apache.ignite:ignite-indexing", version.ref = "ignite" }
+infinispan-api = { module = "org.infinispan:infinispan-api" }
+infinispan-bom = { module = "org.infinispan:infinispan-bom", version.ref = "infinispan" }
+infinispan-core = { module = "org.infinispan:infinispan-core" }
+infinispan-query = { module = "org.infinispan:infinispan-query" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
 jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
 jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }

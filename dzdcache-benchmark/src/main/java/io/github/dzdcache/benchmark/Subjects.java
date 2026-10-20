@@ -15,7 +15,9 @@ public final class Subjects {
     static {
         FACTORIES.put(DZDCACHE_EMBEDDED, DzdcacheEmbeddedSubject::new);
         FACTORIES.put(DZDCACHE_SERVER, DzdcacheServerSubject::new);
+        FACTORIES.put("hazelcast", HazelcastSubject::new);
         FACTORIES.put(IGNITE, IgniteSubject::new);
+        FACTORIES.put("infinispan", InfinispanSubject::new);
         FACTORIES.put(REDIS_STACK, RedisStackSubject::new);
     }
 
