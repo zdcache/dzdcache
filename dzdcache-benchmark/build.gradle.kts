@@ -14,8 +14,8 @@ val reports = layout.buildDirectory.dir("reports/dzdcache-benchmark")
 val plan = providers.gradleProperty("benchmark.plan").orElse("quick")
 val planArgs = plan.map {
     when (it) {
-        "full" -> listOf("-f", "3", "-wi", "1", "-w", "600ms", "-i", "2", "-r", "300ms")
-        "quick" -> listOf("-f", "1", "-wi", "1", "-w", "600ms", "-i", "2", "-r", "300ms")
+        "full" -> listOf("-f", "3", "-wi", "5", "-w", "3s", "-i", "3", "-r", "3s")
+        "quick" -> listOf("-f", "1", "-wi", "3", "-w", "2s", "-i", "2", "-r", "1s")
         "custom" -> listOf()
         else -> throw GradleException("benchmark.plan must be quick, full or custom")
     }

@@ -14,6 +14,16 @@ import tools.jackson.databind.json.JsonMapper;
 
 public final class ComparisonReport {
     private record Section(String benchmark, String title) { }
+    static String iterations(JsonNode results) {
+        if (results.isEmpty()) return "";
+        JsonNode run = results.get(0);
+        int forks = run.path("forks").asInt();
+        return " Every measurement runs in " + forks + (forks == 1 ? " fresh JVM" : " fresh JVMs") + " that each start their own cluster, "
+            + "and measures " + run.path("measurementIterations").asInt() + " × " + run.path("measurementTime").asText()
+            + " after a warm-up of " + run.path("warmupIterations").asInt() + " × " + run.path("warmupTime").asText()
+            + ", so that the JVMs, including the dzdcache servers in Docker, have compiled their hot code before they are measured.";
+    }
+
     private static final List<Section> SEARCHES = List.of(
         new Section("SearchBenchmark.exactCity", "Exact: everyone who lives in a city"),
         new Section("SearchBenchmark.prefixName", "Prefix: names starting with two letters"),
@@ -54,7 +64,8 @@ public final class ComparisonReport {
         md.append("Generated ").append(LocalDate.now()).append(" (").append(plan).append(" run) on ").append(jvm.isBlank() ? "an unknown JVM" : jvm)
             .append(", ").append(Runtime.getRuntime().availableProcessors()).append(" CPUs, everything on one machine. Every subject runs ")
             .append("three nodes; data is loaded through node 1 and every measured call is made on node 2 by 4 threads. Operations per second, ")
-            .append("higher is better; ± is the 99.9% confidence interval, shown when there are enough measurements.\n\n");
+            .append("higher is better; ± is the 99.9% confidence interval, shown when there are enough measurements.")
+            .append(iterations(results)).append("\n\n");
         List<String> inProcess = subjects.stream().filter(subject -> !Subjects.inDocker(subject)).toList();
         List<String> outOfProcess = subjects.stream().filter(Subjects::inDocker).toList();
         md.append("The subjects fall into two groups that are only compared within each group:\n\n");
