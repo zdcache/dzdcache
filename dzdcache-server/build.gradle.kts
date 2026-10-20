@@ -39,3 +39,17 @@ tasks.register<JavaExec>("jmh") {
     })
     doFirst { results.get().asFile.parentFile.mkdirs() }
 }
+
+tasks.register<JavaExec>("footprint") {
+    description = "Measures the retained heap per cached root for each type kind; pass the root count with -Pfootprint.roots=N."
+    group = "verification"
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass = "io.github.dzdcache.server.bench.MemoryFootprint"
+    maxHeapSize = "2g"
+    jvmArgs("-XX:+UseSerialGC")
+    setEnvironment(environment.filterKeys { it != "JAVA_TOOL_OPTIONS" })
+    outputs.upToDateWhen { false }
+    val roots = providers.gradleProperty("footprint.roots").orElse("100000")
+    val examples = rootProject.layout.projectDirectory.dir("examples").asFile.absolutePath
+    argumentProviders.add(CommandLineArgumentProvider { listOf(examples, roots.get()) })
+}
