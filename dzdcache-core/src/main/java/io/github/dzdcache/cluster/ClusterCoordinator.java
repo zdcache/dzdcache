@@ -770,13 +770,15 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         }
         if (limit <= ackedIndex) return;
         ackedIndex = limit;
+        List<Map.Entry<CompletableFuture<Result>, Result>> finished = new ArrayList<>();
         for (Iterator<Map.Entry<Long, Result>> it = results.entrySet().iterator(); it.hasNext(); ) {
             Map.Entry<Long, Result> done = it.next();
             if (done.getKey() > limit) continue;
             it.remove();
             CompletableFuture<Result> future = pending.remove(done.getKey());
-            if (future != null) future.complete(done.getValue());
+            if (future != null) finished.add(Map.entry(future, done.getValue()));
         }
+        for (Map.Entry<CompletableFuture<Result>, Result> done : finished) done.getKey().complete(done.getValue());
     }
 
     private void stepDown(long newTerm) { stepDown(newTerm, true); }

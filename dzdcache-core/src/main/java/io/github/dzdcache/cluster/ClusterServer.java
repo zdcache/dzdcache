@@ -40,6 +40,7 @@ public final class ClusterServer implements AutoCloseable {
 
     public synchronized void start() throws IOException {
         if (server != null) return;
+        System.setProperty("sun.net.httpserver.nodelay", "true");
         if (properties.getClusterToken().isBlank()) throw new IllegalStateException("dzdcache.cluster-token is required for the cluster port");
         server = ssl == null ? HttpServer.create(address, 0) : https();
         server.setExecutor(executor);

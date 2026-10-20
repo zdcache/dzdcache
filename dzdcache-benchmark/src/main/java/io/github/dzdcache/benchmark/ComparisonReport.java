@@ -65,6 +65,7 @@ public final class ComparisonReport {
             .append("Each runs as three Docker containers on one Docker network, and the benchmark calls node 2 through Docker's port mapping, ")
             .append("so both pay for a network round trip and serialization on every call. ")
             .append("These are ").append(String.join(", ", outOfProcess)).append(".\n\n");
+        if (!outOfProcess.isEmpty()) md.append("Docker had ").append(docker()).append(" for the out-of-process subjects.\n\n");
         group(md, "In-process caches", inProcess, scores, sizes);
         group(md, "Out-of-process caches", outOfProcess, scores, sizes);
 
@@ -96,6 +97,15 @@ public final class ComparisonReport {
         md.append("### Key-value, for comparison\n\n");
         md.append("dzdcache is built for the searches above. Lookups by id and writes are shown for completeness.\n\n");
         for (Section section : KEY_VALUE) table(md, section, scores, members, sizes);
+    }
+
+    private static String docker() {
+        try {
+            Process process = new ProcessBuilder("docker", "info", "--format", "{{.NCPU}} {{.MemTotal}}").redirectErrorStream(true).start();
+            String[] parts = new String(process.getInputStream().readAllBytes()).trim().split(" ");
+            process.waitFor();
+            return parts[0] + " CPUs and " + String.format(Locale.ROOT, "%.1f", Long.parseLong(parts[1]) / 1e9) + " GB of memory";
+        } catch (Exception e) { return "an unknown amount of CPU and memory"; }
     }
 
     private static String where(String subject) { return Subjects.inDocker(subject) ? "out-of-process" : "in-process"; }
