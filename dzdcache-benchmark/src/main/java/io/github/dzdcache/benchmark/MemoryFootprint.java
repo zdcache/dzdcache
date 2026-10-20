@@ -32,7 +32,7 @@ public final class MemoryFootprint {
                 OptionalLong externalAfter = cache.externalBytes();
                 if (externalBefore.isPresent() && externalAfter.isPresent()) {
                     row.put("bytesPerPersonPerNode", (externalAfter.getAsLong() - externalBefore.getAsLong()) / (double) size);
-                    row.put("measured", "on one node, reported by the node");
+                    row.put("measured", cache.nodesInThisJvm() == 0 ? "reported by node 2 (used memory)" : "reported by node 2 (off-heap data region)");
                 } else if (cache.nodesInThisJvm() == 0) {
                     row.put("measured", "not measured: the nodes run in other processes");
                 } else {

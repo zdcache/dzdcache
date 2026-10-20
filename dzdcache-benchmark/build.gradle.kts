@@ -40,7 +40,7 @@ dependencies {
     compileOnly("org.infinispan:infinispan-component-annotations")
     annotationProcessor(libs.jmh.generator)
     implementation(libs.ignite.core)
-    implementation(libs.ignite.indexing)
+    implementation(libs.ignite.indexing) { exclude(group = "org.apache.lucene", module = "lucene-analyzers-common") }
     implementation(libs.h2.ignite) { version { strictly(libs.versions.h2.ignite.get()) } }
     implementation(libs.jedis) { version { strictly(libs.versions.jedis.get()) } }
     implementation(libs.testcontainers)

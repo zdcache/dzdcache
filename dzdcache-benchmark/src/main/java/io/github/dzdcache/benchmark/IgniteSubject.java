@@ -65,6 +65,8 @@ public final class IgniteSubject implements DistributedSubject {
                     .setWorkDirectory(work.resolve("node-" + i).toString()).setDiscoverySpi(discoverySpi).setCommunicationSpi(communicationSpi)
                     .setPeerClassLoadingEnabled(false).setGridLogger(new NullLogger()).setMetricsLogFrequency(0)
                     .setClientConnectorConfiguration(null).setConnectorConfiguration(null).setFailureHandler(new StopNodeFailureHandler())
+                    .setDataStorageConfiguration(new org.apache.ignite.configuration.DataStorageConfiguration().setDefaultDataRegionConfiguration(
+                        new org.apache.ignite.configuration.DataRegionConfiguration().setName("default").setMetricsEnabled(true)))
                     .setCacheConfiguration(people(), tags())));
             }
             Waits.until("the Ignite nodes have formed a cluster", () -> nodes.stream().allMatch(node -> node.cluster().nodes().size() == 3));
@@ -155,6 +157,7 @@ public final class IgniteSubject implements DistributedSubject {
     }
     @Override public void putViaFirst(Person person) { write(nodes.getFirst(), person); }
     @Override public void put(Person person) { write(nodes.get(1), person); }
+    @Override public java.util.OptionalLong externalBytes() { return java.util.OptionalLong.of(nodes.get(1).dataRegionMetrics("default").getTotalUsedSize()); }
     @Override public Person get(long id) {
         BinaryObject row = people(nodes.get(1)).get(id);
         return row == null ? null : person(id, row);
