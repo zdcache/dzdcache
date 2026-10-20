@@ -124,7 +124,7 @@ All entry and query paths are generic. The specification and version travel in t
 
 Invalid input returns 400; incompatible schemas or equal-revision conflicts return 409; schema/revision metadata limits return 429; oversized requests return 413; searches matching more than `max-search-results` roots without a `limit` return 422; availability/replication failures return 503. Unknown specifications return 404. A failed distributed mutation **may already have applied** to some nodes: retry its unchanged revision and payload. Older mutations are ignored and can still receive a successful response.
 
-Nodes talk to each other on a separate cluster port, `dzdcache.cluster-port` (7070), at `/internal/raft`: log entries, votes, snapshots, joins and forwarded writes. It uses the cluster token and remains available while a node joins. A standalone node does not open it. Every request carries the cluster protocol version; a node that speaks another version is refused with 409, so a rolling update to an incompatible version stops at the first new node instead of mixing versions.
+Nodes talk to each other on a separate cluster port, `dzdcache.cluster-port` (7070), over one TCP connection per peer: log entries, votes, snapshots, joins and forwarded writes. It uses the cluster token and remains available while a node joins. A standalone node does not open it. Every connection starts with the cluster protocol version; a node that speaks another version is refused, so a rolling update to an incompatible version stops at the first new node instead of mixing versions.
 
 ## Run three nodes locally
 

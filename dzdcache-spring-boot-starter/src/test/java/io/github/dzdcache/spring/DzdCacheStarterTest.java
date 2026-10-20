@@ -2,7 +2,7 @@ package io.github.dzdcache.spring;
 
 import io.github.dzdcache.cache.CacheException;
 import io.github.dzdcache.cache.EngineHolder;
-import io.github.dzdcache.cluster.HttpRaftTransport;
+import io.github.dzdcache.cluster.TcpRaftTransport;
 import io.github.dzdcache.cluster.Member;
 import io.github.dzdcache.cluster.Message;
 import io.github.dzdcache.cluster.RaftTransport;
@@ -62,10 +62,10 @@ class DzdCacheStarterTest {
     static class PartitionableStudents {
         @Bean io.micrometer.core.instrument.MeterRegistry meterRegistry() { return new io.micrometer.core.instrument.simple.SimpleMeterRegistry(); }
         @Bean RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
-            RaftTransport http = new HttpRaftTransport(mapper.mapper(), properties);
+            RaftTransport tcp = new TcpRaftTransport(mapper.mapper(), properties);
             int own = properties.getClusterPort();
             return (URI peer, Message message) -> cutOff.contains(own) != cutOff.contains(peer.getPort()) || cutLinks.contains(link(own, peer.getPort()))
-                ? CompletableFuture.failedFuture(new ConnectException("partitioned")) : http.send(peer, message);
+                ? CompletableFuture.failedFuture(new ConnectException("partitioned")) : tcp.send(peer, message);
         }
     }
 

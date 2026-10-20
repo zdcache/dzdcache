@@ -1,31 +1,36 @@
 package io.github.dzdcache.cluster;
 
-import com.sun.net.httpserver.HttpExchange;
-import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.HttpsConfigurator;
-import com.sun.net.httpserver.HttpsParameters;
-import com.sun.net.httpserver.HttpsServer;
 import io.github.dzdcache.config.ServiceProperties;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLServerSocket;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 public final class ClusterServer implements AutoCloseable {
+    private static final int HTTP_HEADER_LIMIT = 16 * 1024;
+
     private final InetSocketAddress address;
     private final MessageHandler coordinator;
     private final ObjectMapper mapper;
     private final ServiceProperties properties;
     private final SSLContext ssl;
     private final boolean needClientAuth;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    private HttpServer server;
+    private final Set<FrameChannel> channels = ConcurrentHashMap.newKeySet();
+    private ServerSocket server;
 
     public ClusterServer(InetSocketAddress address, MessageHandler coordinator, ObjectMapper mapper, ServiceProperties properties) {
         this(address, coordinator, mapper, properties, null, false);
@@ -40,66 +45,110 @@ public final class ClusterServer implements AutoCloseable {
 
     public synchronized void start() throws IOException {
         if (server != null) return;
-        System.setProperty("sun.net.httpserver.nodelay", "true");
         if (properties.getClusterToken().isBlank()) throw new IllegalStateException("dzdcache.cluster-token is required for the cluster port");
-        server = ssl == null ? HttpServer.create(address, 0) : https();
-        server.setExecutor(executor);
-        server.createContext("/internal/raft", this::handle);
-        server.start();
+        ServerSocket socket = ssl == null ? new ServerSocket() : ssl.getServerSocketFactory().createServerSocket();
+        if (socket instanceof SSLServerSocket tls) tls.setNeedClientAuth(needClientAuth);
+        socket.setReuseAddress(true);
+        socket.bind(address);
+        server = socket;
+        Thread.ofVirtual().name("dzdcache-cluster-accept").start(() -> accept(socket));
     }
 
-    private HttpsServer https() throws IOException {
-        HttpsServer https = HttpsServer.create(address, 0);
-        https.setHttpsConfigurator(new HttpsConfigurator(ssl) {
-            @Override public void configure(HttpsParameters parameters) {
-                SSLParameters tls = getSSLContext().getDefaultSSLParameters();
-                tls.setNeedClientAuth(needClientAuth);
-                parameters.setSSLParameters(tls);
-            }
-        });
-        return https;
-    }
+    public synchronized int port() { return server.getLocalPort(); }
 
-    public synchronized int port() { return server.getAddress().getPort(); }
-
-    private void handle(HttpExchange exchange) throws IOException {
-        try (exchange) {
-            if (!exchange.getRequestMethod().equals("POST")) { reply(exchange, 405, new byte[0]); return; }
-            if (!authorized(exchange.getRequestHeaders().getFirst("Authorization"))) { reply(exchange, 401, new byte[0]); return; }
-            String protocol = exchange.getRequestHeaders().getFirst(Protocol.HEADER);
-            if (!String.valueOf(Protocol.VERSION).equals(protocol)) {
-                exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-                reply(exchange, 409, ("This node speaks cluster protocol " + Protocol.VERSION + "; the request uses "
-                    + (protocol == null ? "none" : protocol)).getBytes(StandardCharsets.UTF_8));
-                return;
-            }
-            byte[] body = exchange.getRequestBody().readNBytes(properties.getMaxSnapshotBytes() + 1);
-            if (body.length > properties.getMaxSnapshotBytes()) { reply(exchange, 413, new byte[0]); return; }
-            Message request;
-            try { request = mapper.readValue(body, Message.class); }
-            catch (RuntimeException e) { reply(exchange, 400, new byte[0]); return; }
-            Message answer;
-            try { answer = coordinator.handle(request).get(properties.getReplicationTimeout().toMillis() * 3, TimeUnit.MILLISECONDS); }
-            catch (InterruptedException e) { Thread.currentThread().interrupt(); answer = new Message.Refused(503, "Interrupted"); }
-            catch (Exception e) { answer = new Message.Refused(503, e.toString()); }
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            reply(exchange, 200, mapper.writeValueAsBytes(answer));
+    private void accept(ServerSocket socket) {
+        while (!socket.isClosed()) {
+            Socket connection;
+            try { connection = socket.accept(); }
+            catch (IOException e) { continue; }
+            Thread.ofVirtual().name("dzdcache-cluster-connection").start(() -> serve(connection));
         }
     }
 
-    private boolean authorized(String header) {
-        return header != null && MessageDigest.isEqual(header.getBytes(StandardCharsets.UTF_8),
-            ("Bearer " + properties.getClusterToken()).getBytes(StandardCharsets.UTF_8));
+    private void serve(Socket socket) {
+        FrameChannel channel;
+        try { channel = new FrameChannel(socket); }
+        catch (IOException e) { close(socket); return; }
+        channels.add(channel);
+        try {
+            socket.setSoTimeout((int) properties.getReplicationTimeout().toMillis());
+            byte[] start = channel.readMagic();
+            if (!FrameChannel.isMagic(start)) { refuseHttp(channel, start); return; }
+            FrameChannel.Frame hello = channel.read(FrameChannel.HELLO_LIMIT);
+            String refusal = hello.oversized() ? "The greeting is too large" : refusal(hello.body());
+            if (refusal != null) {
+                int status = refusal.startsWith("This node speaks") ? 409 : 401;
+                channel.writeNow(0, mapper.writeValueAsBytes(Map.of("status", status, "message", refusal)), true);
+                return;
+            }
+            channel.writeNow(0, mapper.writeValueAsBytes(Map.of("status", 200)), true);
+            socket.setSoTimeout(0);
+            LinkedBlockingQueue<FrameChannel.Outgoing> replies = new LinkedBlockingQueue<>();
+            channel.startWriting(replies, mapper, (id, failure) -> replies.add(new FrameChannel.Outgoing(id,
+                new Message.Refused(500, "The reply could not be encoded: " + failure.getMessage()))), channel::close);
+            long timeout = properties.getReplicationTimeout().toMillis() * 3;
+            while (!channel.closed()) {
+                FrameChannel.Frame frame = channel.read(properties.getMaxSnapshotBytes());
+                if (frame.oversized()) { replies.add(new FrameChannel.Outgoing(frame.id(), new Message.Refused(413, "The message is too large"))); continue; }
+                Message request;
+                try { request = mapper.readValue(frame.body(), Message.class); }
+                catch (RuntimeException e) { replies.add(new FrameChannel.Outgoing(frame.id(), new Message.Refused(400, "The message is not valid"))); continue; }
+                coordinator.handle(request).completeOnTimeout(new Message.Refused(503, "Timed out"), timeout, TimeUnit.MILLISECONDS)
+                    .whenComplete((answer, error) -> replies.add(new FrameChannel.Outgoing(frame.id(),
+                        error == null ? answer : new Message.Refused(503, error.toString()))));
+            }
+        } catch (IOException | RuntimeException ignored) {
+        } finally {
+            channels.remove(channel);
+            channel.close();
+        }
     }
 
-    private static void reply(HttpExchange exchange, int status, byte[] body) throws IOException {
-        exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
-        if (body.length > 0) exchange.getResponseBody().write(body);
+    private String refusal(byte[] body) {
+        JsonNode hello;
+        try { hello = mapper.readTree(body); }
+        catch (RuntimeException e) { return "The greeting is not valid"; }
+        int protocol = hello.path("protocol").asInt(-1);
+        if (protocol != Protocol.VERSION) return "This node speaks cluster protocol " + Protocol.VERSION + "; the request uses " + protocol;
+        String token = hello.path("token").asString("");
+        if (!MessageDigest.isEqual(token.getBytes(StandardCharsets.UTF_8), properties.getClusterToken().getBytes(StandardCharsets.UTF_8)))
+            return "The cluster token is wrong";
+        return null;
+    }
+
+    private void refuseHttp(FrameChannel channel, byte[] start) throws IOException {
+        DataInputStream in = channel.input();
+        ByteArrayOutputStream head = new ByteArrayOutputStream();
+        head.writeBytes(start);
+        while (head.size() < HTTP_HEADER_LIMIT && !head.toString(StandardCharsets.ISO_8859_1).contains("\r\n\r\n")) {
+            int next = in.read();
+            if (next < 0) break;
+            head.write(next);
+        }
+        String version = "none";
+        for (String line : head.toString(StandardCharsets.ISO_8859_1).split("\r\n")) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).trim().toLowerCase(Locale.ROOT).equals(Protocol.HEADER.toLowerCase(Locale.ROOT)))
+                version = line.substring(colon + 1).trim();
+        }
+        byte[] body = ("This node speaks cluster protocol " + Protocol.VERSION + "; the request uses " + version).getBytes(StandardCharsets.UTF_8);
+        String response = "HTTP/1.1 409 Conflict\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.length
+            + "\r\nConnection: close\r\n\r\n";
+        channel.output().write(response.getBytes(StandardCharsets.ISO_8859_1));
+        channel.output().write(body);
+        channel.output().flush();
+    }
+
+    private static void close(Socket socket) {
+        try { socket.close(); } catch (IOException ignored) { }
     }
 
     @Override public synchronized void close() {
-        if (server != null) server.stop(0);
+        if (server != null) {
+            try { server.close(); } catch (IOException ignored) { }
+        }
         server = null;
-        executor.shutdownNow();
+        for (FrameChannel channel : channels) channel.close();
+        channels.clear();
     }
 }

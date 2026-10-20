@@ -54,8 +54,8 @@ class ClusterTlsTest {
         return server.port();
     }
 
-    private HttpRaftTransport client(String identity, boolean verifyHostname) throws Exception {
-        return keep(new HttpRaftTransport(mapper, properties, PeerTrust.context("TLS", identity == null ? null : keys(identity), trust(), verifyHostname)));
+    private TcpRaftTransport client(String identity, boolean verifyHostname) throws Exception {
+        return keep(new TcpRaftTransport(mapper, properties, PeerTrust.context("TLS", identity == null ? null : keys(identity), trust(), verifyHostname)));
     }
 
     private <T extends AutoCloseable> T keep(T resource) { resources.add(resource); return resource; }
@@ -73,7 +73,7 @@ class ClusterTlsTest {
 
     @Test void aPlainHttpClientCannotTalkToATlsServerAndATlsClientRefusesHttpPeers() throws Exception {
         int port = server("node", false);
-        var plain = keep(new HttpRaftTransport(mapper, properties));
+        var plain = keep(new TcpRaftTransport(mapper, properties));
         assertThatThrownBy(() -> whoLeads(plain, "http://127.0.0.1:" + port)).isInstanceOf(ExecutionException.class);
         assertThatThrownBy(() -> whoLeads(client(null, true), "http://127.0.0.1:" + port))
             .isInstanceOf(ExecutionException.class).hasMessageContaining("must be addressed with https://");

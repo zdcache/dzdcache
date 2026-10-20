@@ -86,7 +86,7 @@ public class DzdCacheAutoConfiguration {
     @Bean @ConditionalOnMissingBean
     RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties, DiscoveryProperties discovery,
                                     ObjectProvider<SslBundles> bundles) {
-        return new HttpRaftTransport(mapper.mapper(), properties, clusterSsl(properties, discovery, bundles));
+        return new TcpRaftTransport(mapper.mapper(), properties, clusterSsl(properties, discovery, bundles));
     }
 
     private static SSLContext clusterSsl(ServiceProperties properties, DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
