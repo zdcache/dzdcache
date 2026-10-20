@@ -32,6 +32,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private static final int ACCESSES_PER_ENTRY = 10_000;
     private static final long DISCOVERY_RETRY = 500;
     private static final long SNAPSHOT_REUSE = 60_000;
+    private static final int FORWARDS_IN_FLIGHT = 8;
+    private static final int PUTS_PER_FORWARD = 1_000;
 
     public record Outcome(int status, String error, EntryMutation mutation) {
         static Outcome applied(EntryMutation mutation) { return new Outcome(200, null, mutation); }
@@ -60,6 +62,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     }
     public record ClusterView(int size, List<Member> members, Member master, Integer previousSize, List<Member> previousMembers) { }
     private record Change(UnaryOperator<List<Member>> change, int size, CompletableFuture<Void> done) { }
+    private record Forward(Message request, long deadline, long started, CompletableFuture<Result> result) { }
     private record Snapshot(String id, long index, long term, List<Member> members, Config config, CacheEngine.Capture capture, long createdAt) { }
     private record Install(Message.SnapshotOffer offer, CacheEngine engine) { }
     private static final class Progress {
@@ -107,6 +110,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private final Map<String, Holder> leases = new HashMap<>();
     private final List<Access> reported = new ArrayList<>();
     private final ArrayDeque<Change> changes = new ArrayDeque<>();
+    private final ArrayDeque<Forward> queuedPuts = new ArrayDeque<>();
+    private int putsInFlight;
     private final Set<URI> knownPeers = new LinkedHashSet<>();
     private final Map<String, Message.Leader> peerLogs = new HashMap<>();
     private long peerLogsAt = Long.MIN_VALUE / 2;
@@ -411,22 +416,70 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             else timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
             return;
         }
+        Forward forward = new Forward(request, deadline, started, result);
+        if (request instanceof Message.ForwardPuts) { queuedPuts.add(forward); forwardPuts(); return; }
+        forward(current, List.of(forward), request, () -> { });
+    }
+
+    private void forwardPuts() {
+        while (putsInFlight < FORWARDS_IN_FLIGHT && !queuedPuts.isEmpty()) {
+            Member current = master;
+            if (closed || role == Role.MASTER || current == null) {
+                List<Forward> waiting = new ArrayList<>(queuedPuts);
+                queuedPuts.clear();
+                for (Forward forward : waiting) submit(forward.request(), forward.deadline(), forward.started(), forward.result());
+                return;
+            }
+            List<Forward> batch = new ArrayList<>();
+            List<PutRequest> puts = new ArrayList<>();
+            while (!queuedPuts.isEmpty() && (batch.isEmpty() || puts.size() + puts(queuedPuts.peek()).size() <= PUTS_PER_FORWARD)) {
+                Forward forward = queuedPuts.poll();
+                batch.add(forward);
+                puts.addAll(puts(forward));
+            }
+            putsInFlight++;
+            forward(current, batch, new Message.ForwardPuts(puts), () -> { putsInFlight--; forwardPuts(); });
+        }
+    }
+
+    private static List<PutRequest> puts(Forward forward) { return ((Message.ForwardPuts) forward.request()).puts(); }
+
+    private void forward(Member current, List<Forward> batch, Message request, Runnable answered) {
         send(current.url(), request, reply -> {
+            answered.run();
             switch (reply) {
                 case Message.Written written -> {
-                    writtenForwarded.record(since(started), NANOSECONDS);
-                    result.complete(new Result(written.view(), written.outcomes()));
+                    int from = 0;
+                    for (Forward forward : batch) {
+                        int count = forward.request() instanceof Message.ForwardPuts ? puts(forward).size() : written.outcomes().size();
+                        writtenForwarded.record(since(forward.started()), NANOSECONDS);
+                        forward.result().complete(new Result(written.view(), new ArrayList<>(written.outcomes().subList(from, from + count))));
+                        from += count;
+                    }
                 }
-                case Message.Refused refused when refused.status() == 503 && timers.now() < deadline ->
-                    timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
-                case Message.Refused refused -> result.completeExceptionally(new CacheException(refused.status(), refused.message()));
-                default -> result.completeExceptionally(new CacheException(503, "Unexpected reply from the master"));
+                case Message.Refused refused -> {
+                    for (Forward forward : batch) {
+                        if (refused.status() == 503 && timers.now() < forward.deadline()) retry(forward);
+                        else forward.result().completeExceptionally(new CacheException(refused.status(), refused.message()));
+                    }
+                }
+                default -> {
+                    for (Forward forward : batch) forward.result().completeExceptionally(new CacheException(503, "Unexpected reply from the master"));
+                }
             }
         }, error -> {
-            if (timers.now() >= deadline) { result.completeExceptionally(new CacheException(503, "The master is unreachable")); return; }
+            answered.run();
             if (master == current) master = null;
-            timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
+            for (Forward forward : batch) {
+                if (timers.now() >= forward.deadline()) forward.result().completeExceptionally(new CacheException(503, "The master is unreachable"));
+                else retry(forward);
+            }
         });
+    }
+
+    private void retry(Forward forward) {
+        timers.schedule(properties.getHeartbeatInterval().toMillis(),
+            () -> submit(forward.request(), forward.deadline(), forward.started(), forward.result()));
     }
 
     private static <T> void relay(CompletableFuture<T> source, CompletableFuture<T> target) {

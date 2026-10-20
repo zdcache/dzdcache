@@ -96,6 +96,51 @@ class ClusterSimulationTest {
         assertThat(a.meters.get("dzdcache.cluster.loop.delay").timer().count()).isPositive();
     }
 
+    @Test void concurrentWritesThroughAFollowerTravelTogetherAndEachGetsItsOwnOutcome() {
+        SimulatedCluster cluster = new SimulatedCluster(3);
+        TypeDescriptor students = cluster.students(1_000);
+        started(cluster, "a", "b", "c");
+        SimulatedCluster.Node a = master(cluster);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        List<CompletableFuture<List<ClusterCoordinator.Outcome>>> writes = new ArrayList<>();
+        for (int i = 0; i < 60; i++) {
+            PutRequest put = i % 10 == 9 ? new PutRequest("students", 2, 1, put(cluster, i, "Nobody", 1).value(), null, null)
+                : put(cluster, i, "Student " + i, 1);
+            writes.add(c.coordinator.putAsync(List.of(put)));
+        }
+        for (int i = 0; i < writes.size(); i++) {
+            List<ClusterCoordinator.Outcome> outcomes = cluster.await(writes.get(i), 10_000);
+            assertThat(outcomes).as("outcomes of write " + i).hasSize(1);
+            if (i % 10 == 9) assertThat(status(outcomes)).as("write " + i + " names a version that doesn't exist").isNotEqualTo(200);
+            else assertThat(status(outcomes)).as("write " + i).isEqualTo(200);
+        }
+        assertThat(c.meters.get("dzdcache.cluster.round-trip").tag("type", "ForwardPuts").timer().count()).isLessThan(60);
+        assertThat(c.meters.get("dzdcache.write.duration").tag("route", "forwarded").timer().count()).isEqualTo(60);
+        assertIdentical(cluster);
+        for (SimulatedCluster.Node node : cluster.live())
+            for (long id = 0; id < 60; id++) {
+                if (id % 10 == 9) assertThat(revisions(node)).doesNotContainKey(id);
+                else assertThat(revisions(node)).containsEntry(id, 1L);
+            }
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void writesQueuedOnAFollowerWhenTheMasterCrashesReachTheNewMaster() {
+        SimulatedCluster cluster = new SimulatedCluster(4);
+        TypeDescriptor students = cluster.students(1_000);
+        started(cluster, "a", "b", "c");
+        SimulatedCluster.Node a = master(cluster);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        cluster.crash("a");
+        List<CompletableFuture<List<ClusterCoordinator.Outcome>>> writes = new ArrayList<>();
+        for (int i = 0; i < 20; i++) writes.add(c.coordinator.putAsync(List.of(put(cluster, i, "Student " + i, 1))));
+        for (CompletableFuture<List<ClusterCoordinator.Outcome>> write : writes) assertThat(status(cluster.await(write, 20_000))).isEqualTo(200);
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+    }
+
     @Test void aMasterCrashFailsOverWithinSecondsAndKeepsEveryAcknowledgedWrite() {
         SimulatedCluster cluster = new SimulatedCluster(2);
         TypeDescriptor students = cluster.students(1_000);
