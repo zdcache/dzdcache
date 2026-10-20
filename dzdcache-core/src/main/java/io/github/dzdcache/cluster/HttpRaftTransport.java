@@ -9,22 +9,30 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.*;
+import javax.net.ssl.SSLContext;
 import tools.jackson.databind.ObjectMapper;
 
 public final class HttpRaftTransport implements RaftTransport, AutoCloseable {
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final ServiceProperties properties;
+    private final String scheme;
 
-    public HttpRaftTransport(ObjectMapper mapper, ServiceProperties properties) {
-        this.mapper = mapper; this.properties = properties;
-        http = HttpClient.newBuilder().connectTimeout(properties.getReplicationTimeout()).build();
+    public HttpRaftTransport(ObjectMapper mapper, ServiceProperties properties) { this(mapper, properties, null); }
+
+    public HttpRaftTransport(ObjectMapper mapper, ServiceProperties properties, SSLContext ssl) {
+        this.mapper = mapper; this.properties = properties; scheme = ssl == null ? "http" : "https";
+        var builder = HttpClient.newBuilder().connectTimeout(properties.getReplicationTimeout());
+        if (ssl != null) builder.sslContext(ssl);
+        http = builder.build();
     }
 
     @Override public CompletableFuture<Message> send(URI peer, Message message) {
         Duration timeout = message instanceof Message.ForwardPublish || message instanceof Message.ForwardPuts
             || message instanceof Message.ForwardChange || message instanceof Message.Join || message instanceof Message.Leave
             ? properties.getReplicationTimeout().multipliedBy(3) : properties.getReplicationTimeout();
+        if (!scheme.equals(peer.getScheme())) return CompletableFuture.failedFuture(new IllegalArgumentException(
+            "Peer " + peer + " must be addressed with " + scheme + ":// because cluster TLS is " + (scheme.equals("https") ? "enabled" : "disabled")));
         HttpRequest request;
         try {
             request = HttpRequest.newBuilder(peer.resolve("/internal/raft")).timeout(timeout)

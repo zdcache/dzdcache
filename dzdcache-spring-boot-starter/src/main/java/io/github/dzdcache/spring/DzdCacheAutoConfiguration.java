@@ -5,25 +5,31 @@ import io.github.dzdcache.cache.EngineHolder;
 import io.github.dzdcache.cache.RootTypeFactory;
 import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.dzdcache.cluster.*;
+import io.github.dzdcache.config.ClusterTls;
 import io.github.dzdcache.config.ServiceProperties;
 import io.github.dzdcache.discovery.*;
 import io.github.dzdcache.typed.JacksonRootType;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.InetSocketAddress;
+import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
+import javax.net.ssl.SSLContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.ObjectMapper;
 
-@AutoConfiguration(afterName = "org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration")
+@AutoConfiguration(afterName = {"org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
+    "org.springframework.boot.autoconfigure.ssl.SslAutoConfiguration"})
 @ConditionalOnProperty(prefix = "dzdcache", name = "enabled", matchIfMissing = true)
 public class DzdCacheAutoConfiguration {
     private record Typed(CacheType<?, ?> declaration, TypeDescriptor descriptor, JacksonRootType<?, ?> type) { }
@@ -32,7 +38,11 @@ public class DzdCacheAutoConfiguration {
     ServiceProperties dzdcacheProperties() { return new ServiceProperties(); }
 
     @Bean @ConditionalOnMissingBean @ConfigurationProperties("dzdcache.discovery")
-    DiscoveryProperties dzdcacheDiscoveryProperties() { return new DiscoveryProperties(); }
+    DiscoveryProperties dzdcacheDiscoveryProperties(ServiceProperties properties) {
+        DiscoveryProperties discovery = new DiscoveryProperties();
+        discovery.setScheme(properties.getClusterTls().scheme());
+        return discovery;
+    }
 
     @Bean @ConditionalOnMissingBean
     DzdCacheMapper dzdcacheMapper() { return DzdCacheMapper.create(); }
@@ -74,8 +84,26 @@ public class DzdCacheAutoConfiguration {
     }
 
     @Bean @ConditionalOnMissingBean
-    RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
-        return new HttpRaftTransport(mapper.mapper(), properties);
+    RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties, DiscoveryProperties discovery,
+                                    ObjectProvider<SslBundles> bundles) {
+        return new HttpRaftTransport(mapper.mapper(), properties, clusterSsl(properties, discovery, bundles));
+    }
+
+    private static SSLContext clusterSsl(ServiceProperties properties, DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
+        ClusterTls tls = properties.getClusterTls();
+        tls.validate();
+        if (!tls.scheme().equals(discovery.getScheme()))
+            throw new IllegalArgumentException("dzdcache.discovery.scheme must be " + tls.scheme() + " when dzdcache.cluster-tls.enabled is " + tls.isEnabled());
+        if (!tls.isEnabled()) return null;
+        SslBundles registry = bundles.getIfAvailable();
+        if (registry == null) throw new IllegalStateException("dzdcache.cluster-tls.enabled needs Spring Boot SSL bundles (spring.ssl.bundle.*)");
+        SslBundle bundle = registry.getBundle(tls.getBundle());
+        try {
+            return PeerTrust.context(bundle.getProtocol(), bundle.getManagers().getKeyManagers(), bundle.getManagers().getTrustManagers(),
+                tls.isVerifyHostname());
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Cannot build the cluster TLS context from SSL bundle " + tls.getBundle(), e);
+        }
     }
 
     @Bean @ConditionalOnMissingBean
@@ -107,8 +135,10 @@ public class DzdCacheAutoConfiguration {
     }
 
     @Bean @ConditionalOnMissingBean
-    ClusterServer dzdcacheClusterServer(ClusterCoordinator cluster, ServiceProperties properties, DzdCacheMapper mapper) {
-        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), cluster, mapper.mapper(), properties);
+    ClusterServer dzdcacheClusterServer(ClusterCoordinator cluster, ServiceProperties properties, DzdCacheMapper mapper,
+                                        DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
+        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), cluster, mapper.mapper(), properties,
+            clusterSsl(properties, discovery, bundles), properties.getClusterTls().needClientAuth());
     }
 
     @Bean

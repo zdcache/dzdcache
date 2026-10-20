@@ -107,6 +107,22 @@ class KubernetesPeerDirectoryTest {
         }
     }
 
+    @Test void peersAreAddressedWithHttpsWhenClusterTlsIsOn() throws Exception {
+        try (FakeKubernetes api = new FakeKubernetes()) {
+            api.listResponse.set(query -> new Reply(200, page("50", "", slice("tls", 7443, endpoint("a", "10.0.0.3", "{}")))));
+            DiscoveryProperties properties = properties(api);
+            properties.setScheme("https");
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> new KubernetesPeerDirectory(properties, JsonMapper.builder().build()))
+                .hasMessageContaining("dzdcache.discovery.self-url http://localhost:7070 must use https://");
+            properties.setSelfUrl(URI.create("https://localhost:7443"));
+            try (var directory = new KubernetesPeerDirectory(properties, JsonMapper.builder().build())) {
+                directory.start();
+                await(() -> directory.snapshot().available());
+                assertThat(directory.snapshot().peers()).containsExactlyEntriesOf(Map.of("a", URI.create("https://10.0.0.3:7443")));
+            }
+        }
+    }
+
     @Test void failedInitialDiscoveryNeverLooksLikeAnAvailableEmptyCluster() throws Exception {
         try (FakeKubernetes api = new FakeKubernetes()) {
             api.listResponse.set(query -> new Reply(403, "forbidden"));

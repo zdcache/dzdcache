@@ -85,6 +85,39 @@ dzdcache:
 
 In `kubernetes` mode a starting instance lists the EndpointSlices of a headless peer Service with `publishNotReadyAddresses: true`, and needs a Role that permits EndpointSlice list; see [the server's manifest](../k8s/dzdcache.yaml) for an example. Run the instances as a StatefulSet with the pod name as `dzdcache.discovery.node-id`, so a restarted pod keeps its id. After joining, the Kubernetes API is not used.
 
+## Cluster TLS
+
+Cluster traffic is plain HTTP unless you turn TLS on. TLS is optional and off by default, so networks that terminate or forbid TLS in their own way keep working unchanged.
+
+| Setting | Default |
+| --- | --- |
+| `dzdcache.cluster-tls.enabled` | `false` |
+| `dzdcache.cluster-tls.bundle` | required when enabled; the name of a Spring Boot SSL bundle (`spring.ssl.bundle.pem.<name>` or `spring.ssl.bundle.jks.<name>`) |
+| `dzdcache.cluster-tls.client-auth` | `none`; `need` makes the cluster port require a client certificate trusted by the bundle's trust store, and instances present the bundle's key |
+| `dzdcache.cluster-tls.verify-hostname` | `true` |
+
+The bundle's key and certificate serve the cluster port, and its trust store decides which peers and clients are trusted. With TLS on, `self-url` and `static-peers` must use `https://` (and `http://` with it off); startup fails otherwise. Kubernetes discovery and the pod address advertised from `POD_IP` use `https://` automatically.
+
+```yaml
+dzdcache:
+  cluster-tls:
+    enabled: true
+    bundle: cluster
+    client-auth: need
+spring:
+  ssl:
+    bundle:
+      pem:
+        cluster:
+          keystore:
+            certificate: file:/etc/dzdcache/tls/tls.crt
+            private-key: file:/etc/dzdcache/tls/tls.key
+          truststore:
+            certificate: file:/etc/dzdcache/tls/ca.crt
+```
+
+Peers are usually addressed by IP, and Kubernetes peers always are. With `verify-hostname: true` every node's certificate needs a subject alternative name for each address peers use, such as `IP:10.0.0.11`; a DNS name alone does not match an IP address. When pod IPs are not known in advance, set `verify-hostname: false`: the certificate chain, validity and key usage are still checked against the bundle's trust store, but the address is not matched against the certificate, so use a private CA that only issues cluster certificates.
+
 ## Rolling upgrades
 
 Every instance publishes its declared types when it starts. A type's fingerprint covers its class, properties, identity, dimensions, capacity and TTL. An instance that does not declare a type, or declares it with a different fingerprint, skips that type's changes and lists it as unavailable in health. Give a type a new version when its class or specification changes, so old and new instances can run side by side.

@@ -2,6 +2,9 @@ package io.github.dzdcache.cluster;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.HttpsConfigurator;
+import com.sun.net.httpserver.HttpsParameters;
+import com.sun.net.httpserver.HttpsServer;
 import io.github.dzdcache.config.ServiceProperties;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -10,6 +13,8 @@ import java.security.MessageDigest;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import tools.jackson.databind.ObjectMapper;
 
 public final class ClusterServer implements AutoCloseable {
@@ -17,20 +22,41 @@ public final class ClusterServer implements AutoCloseable {
     private final ClusterCoordinator coordinator;
     private final ObjectMapper mapper;
     private final ServiceProperties properties;
+    private final SSLContext ssl;
+    private final boolean needClientAuth;
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private HttpServer server;
 
     public ClusterServer(InetSocketAddress address, ClusterCoordinator coordinator, ObjectMapper mapper, ServiceProperties properties) {
+        this(address, coordinator, mapper, properties, null, false);
+    }
+
+    public ClusterServer(InetSocketAddress address, ClusterCoordinator coordinator, ObjectMapper mapper, ServiceProperties properties,
+                         SSLContext ssl, boolean needClientAuth) {
+        if (ssl == null && needClientAuth) throw new IllegalArgumentException("Client certificates require cluster TLS");
         this.address = address; this.coordinator = coordinator; this.mapper = mapper; this.properties = properties;
+        this.ssl = ssl; this.needClientAuth = needClientAuth;
     }
 
     public synchronized void start() throws IOException {
         if (server != null) return;
         if (properties.getClusterToken().isBlank()) throw new IllegalStateException("dzdcache.cluster-token is required for the cluster port");
-        server = HttpServer.create(address, 0);
+        server = ssl == null ? HttpServer.create(address, 0) : https();
         server.setExecutor(executor);
         server.createContext("/internal/raft", this::handle);
         server.start();
+    }
+
+    private HttpsServer https() throws IOException {
+        HttpsServer https = HttpsServer.create(address, 0);
+        https.setHttpsConfigurator(new HttpsConfigurator(ssl) {
+            @Override public void configure(HttpsParameters parameters) {
+                SSLParameters tls = getSSLContext().getDefaultSSLParameters();
+                tls.setNeedClientAuth(needClientAuth);
+                parameters.setSSLParameters(tls);
+            }
+        });
+        return https;
     }
 
     public synchronized int port() { return server.getAddress().getPort(); }

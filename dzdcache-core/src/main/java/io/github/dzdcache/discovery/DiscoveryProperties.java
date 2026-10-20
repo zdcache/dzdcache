@@ -20,7 +20,8 @@ public class DiscoveryProperties {
     private Path serviceAccountDirectory = Path.of("/var/run/secrets/kubernetes.io/serviceaccount");
     private int peerPort = 7070;
     private Duration retryDelay = Duration.ofSeconds(1);
-    public URI advertisedUrl() { return podIp.isBlank() ? selfUrl : URI.create("http://" + (podIp.contains(":") ? "[" + podIp + "]" : podIp) + ":" + peerPort); }
+    private String scheme = "http";
+    public URI advertisedUrl() { return podIp.isBlank() ? selfUrl : URI.create(scheme + "://" + (podIp.contains(":") ? "[" + podIp + "]" : podIp) + ":" + peerPort); }
     public String getMode() { return mode; } public void setMode(String v) { mode = v; }
     public String getNodeId() {
         if (nodeId != null && !nodeId.isBlank()) return nodeId;
@@ -36,5 +37,15 @@ public class DiscoveryProperties {
     public URI getApiServer() { return apiServer; } public void setApiServer(URI v) { apiServer = v; }
     public Path getServiceAccountDirectory() { return serviceAccountDirectory; } public void setServiceAccountDirectory(Path v) { serviceAccountDirectory = v; }
     public int getPeerPort() { return peerPort; } public void setPeerPort(int v) { peerPort = v; }
+    public void requireScheme(URI uri, String setting) {
+        if (!scheme.equals(uri.getScheme()))
+            throw new IllegalArgumentException(setting + " " + uri + " must use " + scheme + ":// because dzdcache.cluster-tls.enabled is "
+                + scheme.equals("https"));
+    }
+    public String getScheme() { return scheme; }
+    public void setScheme(String v) {
+        if (!"http".equals(v) && !"https".equals(v)) throw new IllegalArgumentException("Discovery scheme must be http or https");
+        scheme = v;
+    }
     public Duration getRetryDelay() { return retryDelay; } public void setRetryDelay(Duration v) { retryDelay = v; }
 }

@@ -38,6 +38,7 @@ public final class KubernetesPeerDirectory implements PeerDirectory {
         if (!properties.getNamespace().matches("[a-z0-9][a-z0-9-]*")
                 || !properties.getServiceName().matches("[a-z0-9][a-z0-9-]*"))
             throw new IllegalArgumentException("Invalid Kubernetes namespace or Service name");
+        if (properties.getPodIp().isBlank()) properties.requireScheme(properties.getSelfUrl(), "dzdcache.discovery.self-url");
         var builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5));
         if ("https".equals(properties.getApiServer().getScheme())) {
             try (InputStream certificate = Files.newInputStream(properties.getServiceAccountDirectory().resolve("ca.crt"))) {
@@ -105,7 +106,7 @@ public final class KubernetesPeerDirectory implements PeerDirectory {
                 if (!uid.isEmpty() && uid.equals(properties.getPodUid())) continue;
                 for (JsonNode address : endpoint.path("addresses")) {
                     String ip = address.asText(); if (ip.equals(properties.getPodIp())) continue;
-                    URI uri = URI.create("http://" + (ip.contains(":") ? "[" + ip + "]" : ip) + ":" + port);
+                    URI uri = URI.create(properties.getScheme() + "://" + (ip.contains(":") ? "[" + ip + "]" : ip) + ":" + port);
                     if (!uri.equals(properties.getSelfUrl())) peers.put(uid.isEmpty() ? uri.toString() : uid, uri);
                     break; // One address per pod; don't send a mutation twice to dual-stack peers.
                 }

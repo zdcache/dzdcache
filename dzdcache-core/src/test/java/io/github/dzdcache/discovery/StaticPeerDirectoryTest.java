@@ -45,4 +45,29 @@ class StaticPeerDirectoryTest {
         }
         StaticPeerDirectory.validate(URI.create("https://peer:8443/"));
     }
+
+    @Test void peersAndSelfMustUseTheSchemeTheClusterTlsSettingImplies() {
+        var properties = new DiscoveryProperties();
+        properties.setMode("static");
+        properties.setPodIp("");
+        properties.setSelfUrl(URI.create("https://localhost:8080"));
+        properties.setStaticPeers(List.of(URI.create("https://peer:8080")));
+        assertThatThrownBy(() -> new StaticPeerDirectory(properties)).isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("dzdcache.discovery.self-url https://localhost:8080 must use http:// because dzdcache.cluster-tls.enabled is false");
+        properties.setScheme("https");
+        assertThat(new StaticPeerDirectory(properties).snapshot().peers()).containsOnlyKeys("https://peer:8080");
+        properties.setStaticPeers(List.of(URI.create("http://peer:8080")));
+        assertThatThrownBy(() -> new StaticPeerDirectory(properties)).isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("dzdcache.discovery.static-peers entry http://peer:8080 must use https:// because dzdcache.cluster-tls.enabled is true");
+        assertThatThrownBy(() -> properties.setScheme("ftp")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test void theAdvertisedPodAddressUsesTheConfiguredScheme() {
+        var properties = new DiscoveryProperties();
+        properties.setPodIp("10.0.0.7");
+        properties.setPeerPort(7443);
+        assertThat(properties.advertisedUrl()).isEqualTo(URI.create("http://10.0.0.7:7443"));
+        properties.setScheme("https");
+        assertThat(properties.advertisedUrl()).isEqualTo(URI.create("https://10.0.0.7:7443"));
+    }
 }

@@ -152,7 +152,7 @@ Apply the Secret and manifests to the same namespace. The namespaced Role permit
 - The pods form a StatefulSet. Each pod's name is its node id, so a restarted pod takes back its slot, and `DZDCACHE_CLUSTER_SIZE` must equal `replicas`. The downward-API pod IP and UID allow self-exclusion.
 - Probes separate cluster failure from process failure. Pods use a full JDK, run as non-root, and have a read-only filesystem with writable `/tmp`.
 
-The manifest does not install TLS or namespace authorization. Bearer tokens assume a trusted private network; use network policies and TLS/mTLS through your platform when needed. The shared API token grants all cache operations; there are no per-tenant ACLs. Building this project does not deploy it.
+The manifest does not install TLS or namespace authorization. Bearer tokens assume a trusted private network; use network policies and TLS/mTLS through your platform when needed. TLS on the cluster port itself is optional and off by default; see [Cluster TLS](../dzdcache-spring-boot-starter/README.md#cluster-tls). The shared API token grants all cache operations; there are no per-tenant ACLs. Building this project does not deploy it.
 
 ## Operational bounds
 
@@ -177,6 +177,10 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.two-node-takeover` | 3 seconds |
 | `dzdcache.member-timeout` | 30 seconds |
 | `dzdcache.log-retention-bytes` | 64 MiB |
+| `dzdcache.cluster-tls.enabled` | `false`; TLS on the cluster port |
+| `dzdcache.cluster-tls.bundle` | required when enabled; a `spring.ssl.bundle.*` name |
+| `dzdcache.cluster-tls.client-auth` | `none`; `need` requires trusted client certificates (mTLS) |
+| `dzdcache.cluster-tls.verify-hostname` | `true`; certificates then need IP SANs for pod IPs |
 
 Each node holds a full replica, and every node evicts the same roots: a root's last use is the latest of its writes and its gets by identity on any node, members report the gets they served to the master every `access-flush-interval`, the master logs them, and each node keeps the `capacity` most recently used roots, with identity order breaking ties. Searches do not count as use. Nodes agree once they have applied the same log entries. Capacity counts roots, not bytes. Revision fences/tombstones survive value eviction and are bounded separately; new identities are rejected at that bound rather than forgetting ordering protection. Tombstones are dropped once `revision-retention` has passed since their log entry, expired entries once it has passed since their deadline, and records of evicted roots once it has passed since their last use. A mutation older than a dropped record is accepted, so publishers must not deliver or retry mutations later than the retention. There is no schema deletion yet. Use deliberate version rollover and owner repopulation when needed; old namespaces still count toward the schema limit until restart.
 

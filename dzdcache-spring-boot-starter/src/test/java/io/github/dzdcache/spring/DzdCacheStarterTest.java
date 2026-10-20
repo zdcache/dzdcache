@@ -71,16 +71,21 @@ class DzdCacheStarterTest {
     @AfterEach void stop() { cutOff.clear(); nodes.forEach(ConfigurableApplicationContext::close); }
 
     private List<ConfigurableApplicationContext> start(Class<?>... configurations) throws Exception {
+        return start("http", List.of(), configurations);
+    }
+
+    private List<ConfigurableApplicationContext> start(String scheme, List<String> extra, Class<?>... configurations) throws Exception {
         int[] ports = new int[configurations.length];
         for (int i = 0; i < ports.length; i++) try (var socket = new ServerSocket(0)) { ports[i] = socket.getLocalPort(); }
         List<ConfigurableApplicationContext> started = new ArrayList<>();
         for (int i = 0; i < ports.length; i++) {
             List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-" + i,
-                "--dzdcache.cluster-port=" + ports[i], "--dzdcache.discovery.self-url=http://localhost:" + ports[i],
+                "--dzdcache.cluster-port=" + ports[i], "--dzdcache.discovery.self-url=" + scheme + "://localhost:" + ports[i],
                 "--dzdcache.cluster-token=secret", "--logging.level.root=WARN", "--spring.main.banner-mode=off"));
+            args.addAll(extra);
             int peer = 0;
             for (int j = 0; j < ports.length; j++)
-                if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + ports[j]);
+                if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=" + scheme + "://localhost:" + ports[j]);
             ConfigurableApplicationContext node = new SpringApplicationBuilder(configurations[i]).web(WebApplicationType.NONE)
                 .run(args.toArray(String[]::new));
             nodes.add(node);
@@ -122,6 +127,31 @@ class DzdCacheStarterTest {
         assertThat(started).allSatisfy(node -> assertThat(node.getBean(EngineHolder.class).engine().entryCount("students", 1)).isEqualTo(2));
         assertThat(a.invalidate(3L)).isEqualTo(2);
         await(() -> started.stream().allMatch(node -> students(node).get(3L) == null));
+    }
+
+    private static final List<String> TLS = List.of("--dzdcache.cluster-tls.enabled=true", "--dzdcache.cluster-tls.bundle=cluster",
+        "--dzdcache.cluster-tls.client-auth=need",
+        "--spring.ssl.bundle.pem.cluster.keystore.certificate=classpath:tls/node.pem",
+        "--spring.ssl.bundle.pem.cluster.keystore.private-key=classpath:tls/node-key.pem",
+        "--spring.ssl.bundle.pem.cluster.truststore.certificate=classpath:tls/ca.pem");
+
+    @Test void instancesFormAClusterOverMutualTlsFromAnSslBundle() throws Exception {
+        var started = start("https", TLS, Students.class, Students.class, Students.class);
+        assertThat(started).allSatisfy(node -> assertThat(cluster(node).self().url().getScheme()).isEqualTo("https"));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        assertThat(students(started.get(0)).put(new Student(1, "Anna", "Oslo", 22))).isEqualTo(1);
+        await(() -> {
+            try { return new Student(1, "Anna", "Oslo", 22).equals(students(started.get(2)).get(1L)); }
+            catch (RuntimeException e) { return false; }
+        });
+    }
+
+    @Test void clusterTlsRefusesPlainHttpPeerAddresses() {
+        List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=static", "--dzdcache.cluster-token=secret",
+            "--dzdcache.discovery.self-url=http://localhost:7070", "--logging.level.root=OFF", "--spring.main.banner-mode=off"));
+        args.addAll(TLS);
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new)))
+            .hasStackTraceContaining("dzdcache.discovery.self-url http://localhost:7070 must use https:// because dzdcache.cluster-tls.enabled is true");
     }
 
     @Test void writesResumeThroughANewMasterWhenTheMasterStops() throws Exception {

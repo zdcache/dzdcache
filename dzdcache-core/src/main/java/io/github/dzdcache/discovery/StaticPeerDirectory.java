@@ -7,9 +7,13 @@ public final class StaticPeerDirectory implements PeerDirectory {
     private final Membership membership;
     public StaticPeerDirectory(DiscoveryProperties properties) {
         var peers = new LinkedHashMap<String, URI>();
-        if (properties.getMode().equals("static")) for (URI uri : properties.getStaticPeers()) {
-            validate(uri);
-            if (!uri.equals(properties.getSelfUrl())) peers.put(uri.toString(), uri);
+        if (properties.getMode().equals("static")) {
+            if (properties.getPodIp().isBlank()) properties.requireScheme(properties.getSelfUrl(), "dzdcache.discovery.self-url");
+            for (URI uri : properties.getStaticPeers()) {
+                validate(uri);
+                properties.requireScheme(uri, "dzdcache.discovery.static-peers entry");
+                if (!uri.equals(properties.getSelfUrl())) peers.put(uri.toString(), uri);
+            }
         }
         membership = new Membership(peers, 1, true);
     }

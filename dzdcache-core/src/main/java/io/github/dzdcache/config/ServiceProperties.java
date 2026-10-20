@@ -25,6 +25,7 @@ public class ServiceProperties {
     private String clusterToken = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
     private Duration syncInterval = Duration.ofSeconds(10);
+    private final ClusterTls clusterTls = new ClusterTls();
     public void validate() {
         if (maxSchemas < 1 || maxRevisionsPerSchema < 1 || maxRequestBytes < 1 || maxSnapshotBytes < 1
                 || maxRequestBytes == Integer.MAX_VALUE || maxSnapshotBytes == Integer.MAX_VALUE)
@@ -74,4 +75,5 @@ public class ServiceProperties {
     public String getClusterToken() { return clusterToken; } public void setClusterToken(String v) { clusterToken = v; }
     public Duration getReplicationTimeout() { return replicationTimeout; } public void setReplicationTimeout(Duration v) { replicationTimeout = v; }
     public Duration getSyncInterval() { return syncInterval; } public void setSyncInterval(Duration v) { syncInterval = v; }
+    public ClusterTls getClusterTls() { return clusterTls; }
 }
