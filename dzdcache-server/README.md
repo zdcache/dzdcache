@@ -145,7 +145,7 @@ kubectl create secret generic dzdcache-auth \
 kubectl apply -f k8s/dzdcache.yaml
 ```
 
-Apply the Secret and manifests to the same namespace. The namespaced Role permits EndpointSlice list. A starting node lists the peer Service's EndpointSlices to find the cluster; once it has joined, the master keeps the membership and the Kubernetes API is not used.
+Apply the Secret and manifests to the same namespace. `scripts/k8s-test.sh` runs the manifest on a local [kind](https://kind.sigs.k8s.io) cluster and checks a hard kill of the master pod, a rolling restart and a refused cluster-size change. The namespaced Role permits EndpointSlice list. A starting node lists the peer Service's EndpointSlices to find the cluster; once it has joined, the master keeps the membership and the Kubernetes API is not used.
 
 - **`dzdcache:8080`** routes clients to ready pods.
 - **`dzdcache-peers`** is a separate headless Service with `publishNotReadyAddresses: true`. Joining nodes must be reachable for replication before becoming client-ready; readiness-filtered peers would create a bootstrap cycle.

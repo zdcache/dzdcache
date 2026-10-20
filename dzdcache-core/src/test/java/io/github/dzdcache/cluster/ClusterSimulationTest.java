@@ -456,6 +456,22 @@ class ClusterSimulationTest {
         assertThat(cluster.staleReads).isEmpty();
     }
 
+    @Test void aNodeThatStartsAloneWaitsForAMajorityAndOnlyThenFoundsTheClusterWithIt() {
+        SimulatedCluster cluster = new SimulatedCluster(23);
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node a = cluster.start("a");
+        cluster.run(10_000);
+        assertThat(a.coordinator.role()).isEqualTo(ClusterCoordinator.Role.STARTING);
+        assertThat(a.coordinator.bootstrapping()).as("ready for Kubernetes to start the next pod").isTrue();
+        SimulatedCluster.Node b = cluster.start("b");
+        assertThat(cluster.runUntil(() -> a.coordinator.current() && b.coordinator.current(), 20_000)).isTrue();
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b");
+        assertThat(a.coordinator.bootstrapping() || b.coordinator.bootstrapping()).isFalse();
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(() -> c.coordinator.current(), 20_000)).isTrue();
+        assertThat(c.coordinator.bootstrapping()).as("a node joining an existing cluster is not bootstrapping").isFalse();
+    }
+
     @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(15);
         cluster.configure("a", "b", "c");

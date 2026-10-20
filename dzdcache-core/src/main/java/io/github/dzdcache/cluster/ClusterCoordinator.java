@@ -92,6 +92,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private volatile long appliedIndex;
     private volatile boolean closed;
     private volatile String startupProblem;
+    private volatile boolean bootstrapping;
     private final Object currency = new Object();
     private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
     private volatile long servingFrom = Long.MAX_VALUE;
@@ -158,6 +159,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return appliedIndex; }
     public String clusterId() { return clusterId; }
     public String startupProblem() { return startupProblem; }
+    public boolean bootstrapping() { return role == Role.STARTING && bootstrapping && startupProblem == null; }
     public int clusterSize() { return size(); }
     public void requireReady() { if (!ready()) throw new CacheException(503, "Cache is joining the cluster"); }
 
@@ -428,7 +430,11 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         if (!found.available()) return;
         List<URI> peers = found.peers().values().stream().filter(uri -> !uri.equals(self.url())).toList();
         knownPeers.addAll(peers);
-        if (peers.isEmpty()) { foundCluster(List.of()); return; }
+        if (peers.isEmpty()) {
+            bootstrapping = true;
+            if (size() <= 1) foundCluster(List.of());
+            return;
+        }
         Member started = self;
         send(self.url(), new Message.WhoLeads(), reply -> {
             if (role != Role.STARTING || self != started) return;
@@ -448,9 +454,10 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             if (conflict[0] != null) { problem(conflict[0]); return; }
             startupProblem = null;
             Optional<Member> current = answers.stream().map(Message.Leader::master).filter(Objects::nonNull).findFirst();
-            if (current.isPresent()) { join(current.get()); return; }
+            if (current.isPresent()) { bootstrapping = false; join(current.get()); return; }
             boolean majorityAnswered = (answered[0] + 1) * 2 > size();
             boolean noCluster = answers.stream().noneMatch(Message.Leader::member);
+            bootstrapping = noCluster;
             boolean best = answers.stream().allMatch(other -> ahead(other));
             if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
                 foundCluster(answers.stream().map(Message.Leader::self).toList());
