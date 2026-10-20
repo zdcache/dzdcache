@@ -13,4 +13,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "dzdcache"
 
-include("dzdcache-core", "dzdcache-spring-boot-starter", "dzdcache-server")
+include("dzdcache-core", "dzdcache-spring-boot-starter", "dzdcache-server", "dzdcache-benchmark")

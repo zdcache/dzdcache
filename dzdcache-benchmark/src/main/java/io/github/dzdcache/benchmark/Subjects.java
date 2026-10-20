@@ -1,0 +1,27 @@
+package io.github.dzdcache.benchmark;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.IntFunction;
+
+public final class Subjects {
+    public static final String DZDCACHE_EMBEDDED = "dzdcache-embedded";
+    public static final String DZDCACHE_SERVER = "dzdcache-server";
+
+    private static final Map<String, IntFunction<DistributedSubject>> FACTORIES = new LinkedHashMap<>();
+    static {
+        FACTORIES.put(DZDCACHE_EMBEDDED, DzdcacheEmbeddedSubject::new);
+        FACTORIES.put(DZDCACHE_SERVER, DzdcacheServerSubject::new);
+    }
+
+    private Subjects() { }
+
+    public static List<String> names() { return List.copyOf(FACTORIES.keySet()); }
+
+    public static DistributedSubject create(String name, int capacity) {
+        IntFunction<DistributedSubject> factory = FACTORIES.get(name);
+        if (factory == null) throw new IllegalArgumentException("Unknown subject " + name + "; choose one of " + names());
+        return factory.apply(capacity);
+    }
+}
