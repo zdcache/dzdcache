@@ -782,6 +782,22 @@ class ClusterSimulationTest {
         assertThat(cluster.nodes.get("a").coordinator.members()).extracting(Member::id).doesNotContain("c");
     }
 
+    @Test void aNodeThatCannotStartIsNotMadeAFounder() {
+        SimulatedCluster cluster = new SimulatedCluster(17);
+        cluster.configure("a", "b", "c");
+        cluster.selfUrls.put("c", java.net.URI.create("http://a:8080"));
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(() -> c.coordinator.startupProblem() != null, 10_000)).isTrue();
+        cluster.start("a");
+        cluster.start("b");
+        assertThat(cluster.runUntil(() -> cluster.nodes.get("a").coordinator.ready() && cluster.nodes.get("b").coordinator.ready(), 30_000))
+            .as("a and b found the cluster without c").isTrue();
+        cluster.run(5_000);
+        for (String id : List.of("a", "b"))
+            assertThat(cluster.nodes.get(id).coordinator.members()).as("members on " + id).extracting(Member::id).containsExactlyInAnyOrder("a", "b");
+        assertThat(c.coordinator.ready()).isFalse();
+    }
+
     @Test void aSecondNodeWithAnIdAlreadyInUseDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(16);
         started(cluster, "a", "b", "c");

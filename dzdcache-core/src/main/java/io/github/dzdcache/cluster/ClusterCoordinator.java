@@ -296,7 +296,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             case Message.SnapshotPageRequest request -> CompletableFuture.completedFuture(onSnapshotPage(request));
             case Message.WhoLeads ignored -> CompletableFuture.completedFuture(
                 new Message.Leader(self, role != Role.STARTING && members.contains(self), role == Role.STARTING ? null : master(), members,
-                    log.lastIndex(), log.lastTerm(), clusterId, size()));
+                    log.lastIndex(), log.lastTerm(), clusterId, size(), startupProblem != null));
             case Message.Join join -> onJoin(join);
             case Message.Leave leave -> onLeave(leave);
             case Message.ForwardPublish request -> forwarded(request);
@@ -609,6 +609,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
+            else if (reply instanceof Message.Leader leader && leader.cannotStart()) { }
             else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
                 conflict[0] = "Another node at " + peer + " uses the node id " + self.id();
             else if (reply instanceof Message.Leader leader && !leader.member() && leader.clusterSize() != size())
