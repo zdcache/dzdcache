@@ -2,7 +2,7 @@
 
 Replicated, searchable in-memory caches built on [ZDCache](https://github.com/zdcache/zdcache). Every node holds a full replica and answers gets and searches locally; one elected master orders all writes in a replicated log, and a write is acknowledged once every node that may serve reads has applied it, so a read on any node sees every acknowledged write. Every node evicts the same roots. Kubernetes or a static peer list is only used while a node starts, to find the cluster.
 
-This is an initial implementation. Reads are fresh on any node, with one exception: a two-node cluster whose link fails while both nodes stay up. See [consistency and failure behavior](docs/CONSISTENCY.md).
+This is an initial implementation. Reads are fresh on any node, with one exception: a two-node cluster without a witness whose link fails while both nodes stay up. See [consistency and failure behavior](docs/CONSISTENCY.md).
 
 ## Modules
 

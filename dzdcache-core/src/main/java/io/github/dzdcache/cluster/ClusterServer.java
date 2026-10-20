@@ -19,7 +19,7 @@ import tools.jackson.databind.ObjectMapper;
 
 public final class ClusterServer implements AutoCloseable {
     private final InetSocketAddress address;
-    private final ClusterCoordinator coordinator;
+    private final MessageHandler coordinator;
     private final ObjectMapper mapper;
     private final ServiceProperties properties;
     private final SSLContext ssl;
@@ -27,11 +27,11 @@ public final class ClusterServer implements AutoCloseable {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private HttpServer server;
 
-    public ClusterServer(InetSocketAddress address, ClusterCoordinator coordinator, ObjectMapper mapper, ServiceProperties properties) {
+    public ClusterServer(InetSocketAddress address, MessageHandler coordinator, ObjectMapper mapper, ServiceProperties properties) {
         this(address, coordinator, mapper, properties, null, false);
     }
 
-    public ClusterServer(InetSocketAddress address, ClusterCoordinator coordinator, ObjectMapper mapper, ServiceProperties properties,
+    public ClusterServer(InetSocketAddress address, MessageHandler coordinator, ObjectMapper mapper, ServiceProperties properties,
                          SSLContext ssl, boolean needClientAuth) {
         if (ssl == null && needClientAuth) throw new IllegalArgumentException("Client certificates require cluster TLS");
         this.address = address; this.coordinator = coordinator; this.mapper = mapper; this.properties = properties;

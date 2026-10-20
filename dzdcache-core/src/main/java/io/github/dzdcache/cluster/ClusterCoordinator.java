@@ -23,7 +23,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 
 /** One master orders every change in a replicated log; members apply committed entries in log order. */
-public final class ClusterCoordinator implements AutoCloseable {
+public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(ClusterCoordinator.class);
     private static final int ACCESSES_PER_ENTRY = 10_000;
     private static final long DISCOVERY_RETRY = 500;
@@ -218,7 +218,7 @@ public final class ClusterCoordinator implements AutoCloseable {
         return submit(new Message.ForwardChange(mutation)).thenApply(result -> result.outcomes().getFirst());
     }
 
-    public CompletableFuture<Message> handle(Message message) {
+    @Override public CompletableFuture<Message> handle(Message message) {
         return onLoop(() -> switch (message) {
             case Message.Append append -> CompletableFuture.completedFuture(onAppend(append));
             case Message.Vote vote -> CompletableFuture.completedFuture(onVote(vote));

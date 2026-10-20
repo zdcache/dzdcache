@@ -1,0 +1,7 @@
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/CacheType.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/ClusterCache.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/DistributedCache.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/DzdCacheAutoConfiguration.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/DzdCacheHealthIndicator.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/DzdCacheLifecycle.java
+/Users/steinardragsnes/dev/priv/java/dzdcache/dzdcache-spring-boot-starter/src/main/java/io/github/dzdcache/spring/DzdCacheMapper.java

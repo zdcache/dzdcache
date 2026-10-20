@@ -54,6 +54,8 @@ class DzdCacheStarterTest {
     }
 
     static final Set<Integer> cutOff = ConcurrentHashMap.newKeySet();
+    static final Set<String> cutLinks = ConcurrentHashMap.newKeySet();
+    private static String link(int a, int b) { return Math.min(a, b) + "-" + Math.max(a, b); }
 
     @SpringBootConfiguration @Import(Students.class)
     static class PartitionableStudents {
@@ -61,14 +63,14 @@ class DzdCacheStarterTest {
         @Bean RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties) {
             RaftTransport http = new HttpRaftTransport(mapper.mapper(), properties);
             int own = properties.getClusterPort();
-            return (URI peer, Message message) -> cutOff.contains(own) != cutOff.contains(peer.getPort())
+            return (URI peer, Message message) -> cutOff.contains(own) != cutOff.contains(peer.getPort()) || cutLinks.contains(link(own, peer.getPort()))
                 ? CompletableFuture.failedFuture(new ConnectException("partitioned")) : http.send(peer, message);
         }
     }
 
     private final List<ConfigurableApplicationContext> nodes = new ArrayList<>();
 
-    @AfterEach void stop() { cutOff.clear(); nodes.forEach(ConfigurableApplicationContext::close); }
+    @AfterEach void stop() { cutOff.clear(); cutLinks.clear(); nodes.forEach(ConfigurableApplicationContext::close); }
 
     private List<ConfigurableApplicationContext> start(Class<?>... configurations) throws Exception {
         return start("http", List.of(), configurations);
@@ -229,6 +231,36 @@ class DzdCacheStarterTest {
         assertThat(cluster(stranger).startupProblem()).contains("cluster-size 3", "has 2");
         assertThat(cluster(stranger).ready()).isFalse();
         assertThat(cluster(started.get(0)).members()).hasSize(2);
+    }
+
+    @Test void withAWitnessTwoInstancesSurviveABrokenLinkWithOneMasterAndThenTheMasterStopping() throws Exception {
+        int witnessPort;
+        try (var socket = new ServerSocket(0)) { witnessPort = socket.getLocalPort(); }
+        ConfigurableApplicationContext witness = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+            "--dzdcache.discovery.mode=witness", "--dzdcache.cluster-port=" + witnessPort, "--dzdcache.cluster-token=secret",
+            "--logging.level.root=WARN", "--spring.main.banner-mode=off");
+        nodes.add(witness);
+        assertThat(witness.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("role", "WITNESS");
+        var started = start("http", List.of("--dzdcache.witness-url=http://localhost:" + witnessPort),
+            PartitionableStudents.class, PartitionableStudents.class);
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
+            .findFirst().orElseThrow();
+        ConfigurableApplicationContext other = started.stream().filter(node -> node != master).findFirst().orElseThrow();
+        students(master).put(new Student(1, "Anna", "Oslo", 22));
+        cutLinks.add(link(master.getBean(ServiceProperties.class).getClusterPort(), other.getBean(ServiceProperties.class).getClusterPort()));
+        await(() -> !other.getBean(DistributedCache.class).current());
+        Thread.sleep(4_000);
+        assertThat(cluster(master).role()).isEqualTo(ClusterCoordinator.Role.MASTER);
+        assertThat(cluster(other).role()).as("the witness keeps the younger from taking over").isNotEqualTo(ClusterCoordinator.Role.MASTER);
+        assertThat(students(master).put(new Student(2, "Berit", "Bergen", 30))).isEqualTo(1);
+        cutLinks.clear();
+        await(() -> other.getBean(DistributedCache.class).current() && students(other).get(2L) != null);
+
+        master.close();
+        await(() -> cluster(other).role() == ClusterCoordinator.Role.MASTER);
+        assertThat(students(other).put(new Student(3, "Cid", "Oslo", 40))).isEqualTo(1);
+        assertThat(students(other).get(2L)).as("capacity 2 keeps the two most recently used").isEqualTo(new Student(2, "Berit", "Bergen", 30));
     }
 
     @Test void aTypeOnlySomeInstancesDeclareIsUnavailableOnTheOthers() throws Exception {

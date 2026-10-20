@@ -4,7 +4,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-public final class Witness {
+public final class Witness implements MessageHandler {
     private record Claim(Member holder, long term, long until) { }
 
     private final Timers timers;
@@ -16,7 +16,7 @@ public final class Witness {
         this.startedAt = timers.elapsed();
     }
 
-    public synchronized CompletableFuture<Message> handle(Message message) {
+    @Override public synchronized CompletableFuture<Message> handle(Message message) {
         if (!(message instanceof Message.WitnessClaim claim))
             return CompletableFuture.completedFuture(new Message.Refused(503, "This node is a witness"));
         long now = timers.elapsed();

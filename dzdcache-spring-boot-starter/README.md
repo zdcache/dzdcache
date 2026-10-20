@@ -118,6 +118,17 @@ spring:
 
 Peers are usually addressed by IP, and Kubernetes peers always are. With `verify-hostname: true` every node's certificate needs a subject alternative name for each address peers use, such as `IP:10.0.0.11`; a DNS name alone does not match an IP address. When pod IPs are not known in advance, set `verify-hostname: false`: the certificate chain, validity and key usage are still checked against the bundle's trust store, but the address is not matched against the certificate, so use a private CA that only issues cluster certificates.
 
+## Two instances and a witness
+
+A cluster of two instances can add a witness: a small process that stores no data and only decides which instance may act as master. Start the same application, or the dzdcache server, with `dzdcache.discovery.mode=witness`, `dzdcache.cluster-port` and the cluster token, and point both instances at it:
+
+```yaml
+dzdcache:
+  witness-url: http://witness.internal:7070
+```
+
+With a witness, a broken link between the two instances leaves one master and loses no acknowledged write; without one, both act as master until the link returns. The witness is only for clusters of two.
+
 ## Rolling upgrades
 
 Every instance publishes its declared types when it starts. A type's fingerprint covers its class, properties, identity, dimensions, capacity and TTL. An instance that does not declare a type, or declares it with a different fingerprint, skips that type's changes and lists it as unavailable in health. Give a type a new version when its class or specification changes, so old and new instances can run side by side.

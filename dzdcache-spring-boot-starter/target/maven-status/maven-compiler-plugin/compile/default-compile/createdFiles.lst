@@ -1,0 +1,9 @@
+io/github/dzdcache/spring/CacheType.class
+io/github/dzdcache/spring/DistributedCache.class
+io/github/dzdcache/spring/DzdCacheAutoConfiguration$Health.class
+io/github/dzdcache/spring/DzdCacheAutoConfiguration$Typed.class
+io/github/dzdcache/spring/ClusterCache.class
+io/github/dzdcache/spring/DzdCacheHealthIndicator.class
+io/github/dzdcache/spring/DzdCacheMapper.class
+io/github/dzdcache/spring/DzdCacheAutoConfiguration.class
+io/github/dzdcache/spring/DzdCacheLifecycle.class

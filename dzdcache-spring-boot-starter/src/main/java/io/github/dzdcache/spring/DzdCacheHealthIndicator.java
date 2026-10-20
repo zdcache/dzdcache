@@ -8,10 +8,16 @@ import org.springframework.boot.health.contributor.HealthIndicator;
 public class DzdCacheHealthIndicator implements HealthIndicator {
     private final ClusterCoordinator cluster;
     private final EngineHolder engines;
+    private final boolean witness;
 
-    public DzdCacheHealthIndicator(ClusterCoordinator cluster, EngineHolder engines) { this.cluster = cluster; this.engines = engines; }
+    public DzdCacheHealthIndicator(ClusterCoordinator cluster, EngineHolder engines) { this(cluster, engines, false); }
+
+    public DzdCacheHealthIndicator(ClusterCoordinator cluster, EngineHolder engines, boolean witness) {
+        this.cluster = cluster; this.engines = engines; this.witness = witness;
+    }
 
     @Override public Health health() {
+        if (witness) return Health.up().withDetail("role", "WITNESS").build();
         return (cluster.current() ? Health.up() : Health.outOfService())
             .withDetail("role", cluster.role()).withDetail("term", cluster.term())
             .withDetail("master", cluster.master() == null ? "none" : cluster.master().id())

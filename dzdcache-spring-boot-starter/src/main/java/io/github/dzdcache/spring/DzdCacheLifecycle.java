@@ -16,21 +16,22 @@ final class DzdCacheLifecycle implements SmartLifecycle {
     private final ClusterCoordinator cluster;
     private final ClusterServer server;
     private final boolean openClusterPort;
+    private final boolean member;
     private final List<TypeDescriptor> types;
     private volatile boolean running;
     private Thread publisher;
 
-    DzdCacheLifecycle(ClusterCoordinator cluster, ClusterServer server, boolean openClusterPort, List<TypeDescriptor> types) {
-        this.cluster = cluster; this.server = server; this.openClusterPort = openClusterPort; this.types = types;
+    DzdCacheLifecycle(ClusterCoordinator cluster, ClusterServer server, boolean openClusterPort, boolean member, List<TypeDescriptor> types) {
+        this.cluster = cluster; this.server = server; this.openClusterPort = openClusterPort; this.member = member; this.types = types;
     }
 
     @Override public synchronized void start() {
         if (running) return;
         try { if (openClusterPort) server.start(); }
         catch (IOException e) { throw new UncheckedIOException("Cannot open the cluster port", e); }
-        cluster.start();
+        if (member) cluster.start();
         running = true;
-        if (!types.isEmpty()) publisher = Thread.ofVirtual().name("dzdcache-publish").start(this::publishTypes);
+        if (member && !types.isEmpty()) publisher = Thread.ofVirtual().name("dzdcache-publish").start(this::publishTypes);
     }
 
     private void publishTypes() {
@@ -54,7 +55,7 @@ final class DzdCacheLifecycle implements SmartLifecycle {
         if (!running) return;
         running = false;
         if (publisher != null) publisher.interrupt();
-        cluster.close();
+        if (member) cluster.close();
         server.close();
     }
 

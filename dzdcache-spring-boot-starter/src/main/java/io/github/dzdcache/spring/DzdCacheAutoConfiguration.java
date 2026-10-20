@@ -77,9 +77,9 @@ public class DzdCacheAutoConfiguration {
         if (!discovery.getMode().equals("standalone") && properties.getClusterToken().isBlank())
             throw new IllegalArgumentException("dzdcache.cluster-token is required in distributed mode");
         return switch (discovery.getMode()) {
-            case "standalone", "static" -> new StaticPeerDirectory(discovery);
+            case "standalone", "static", "witness" -> new StaticPeerDirectory(discovery);
             case "kubernetes" -> new KubernetesPeerDirectory(discovery, mapper.mapper());
-            default -> throw new IllegalArgumentException("Discovery mode must be standalone, static or kubernetes");
+            default -> throw new IllegalArgumentException("Discovery mode must be standalone, static, kubernetes or witness");
         };
     }
 
@@ -110,6 +110,10 @@ public class DzdCacheAutoConfiguration {
     ClusterCoordinator dzdcacheCluster(EngineHolder engines, PeerDirectory directory, RaftTransport transport, DiscoveryProperties discovery,
                                        ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper) {
         properties.setClusterSize(clusterSize(discovery, properties.getClusterSize()));
+        if (properties.getWitnessUrl() != null) {
+            if (properties.getClusterSize() != 2) throw new IllegalArgumentException("dzdcache.witness-url is only for a cluster of two nodes");
+            discovery.requireScheme(properties.getWitnessUrl(), "dzdcache.witness-url");
+        }
         Member self = new Member(discovery.getNodeId(), discovery.advertisedUrl(), System.currentTimeMillis());
         return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
             new SerialTimers(), new java.security.SecureRandom(), mapper.mapper());
@@ -117,6 +121,7 @@ public class DzdCacheAutoConfiguration {
 
     static int clusterSize(DiscoveryProperties discovery, int configured) {
         return switch (discovery.getMode()) {
+            case "witness" -> 1;
             case "standalone" -> {
                 if (configured > 1) throw new IllegalArgumentException("dzdcache.cluster-size must be 1 in standalone mode");
                 yield 1;
@@ -136,8 +141,8 @@ public class DzdCacheAutoConfiguration {
 
     @Bean @ConditionalOnMissingBean
     ClusterServer dzdcacheClusterServer(ClusterCoordinator cluster, ServiceProperties properties, DzdCacheMapper mapper,
-                                        DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
-        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), cluster, mapper.mapper(), properties,
+                                        DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles, ObjectProvider<Witness> witness) {
+        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), witness.getIfAvailable() != null ? witness.getIfAvailable() : cluster, mapper.mapper(), properties,
             clusterSsl(properties, discovery, bundles), properties.getClusterTls().needClientAuth());
     }
 
@@ -145,8 +150,11 @@ public class DzdCacheAutoConfiguration {
     DzdCacheLifecycle dzdcacheLifecycle(ClusterCoordinator cluster, ClusterServer server, DiscoveryProperties discovery,
                                         ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper) {
         List<TypeDescriptor> descriptors = typed(declarations, values.getIfUnique(mapper::mapper)).stream().map(Typed::descriptor).toList();
-        return new DzdCacheLifecycle(cluster, server, !discovery.getMode().equals("standalone"), descriptors);
+        return new DzdCacheLifecycle(cluster, server, !discovery.getMode().equals("standalone"), !discovery.getMode().equals("witness"), descriptors);
     }
+
+    @Bean @ConditionalOnProperty(prefix = "dzdcache.discovery", name = "mode", havingValue = "witness")
+    Witness dzdcacheWitness() { return new Witness(new SerialTimers()); }
 
     @Bean @ConditionalOnMissingBean
     DistributedCache distributedCache(ClusterCoordinator cluster, EngineHolder engines, ObjectProvider<CacheType<?, ?>> declarations,
@@ -165,8 +173,8 @@ public class DzdCacheAutoConfiguration {
     @ConditionalOnClass(name = "org.springframework.boot.health.contributor.HealthIndicator")
     static class Health {
         @Bean("clusterHealthIndicator") @ConditionalOnMissingBean(name = "clusterHealthIndicator")
-        DzdCacheHealthIndicator clusterHealthIndicator(ClusterCoordinator cluster, EngineHolder engines) {
-            return new DzdCacheHealthIndicator(cluster, engines);
+        DzdCacheHealthIndicator clusterHealthIndicator(ClusterCoordinator cluster, EngineHolder engines, ObjectProvider<Witness> witness) {
+            return new DzdCacheHealthIndicator(cluster, engines, witness.getIfAvailable() != null);
         }
     }
 }
