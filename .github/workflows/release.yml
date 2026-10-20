@@ -54,7 +54,10 @@ jobs:
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.SIGNING_KEY_PASSWORD }}
       - run: bash scripts/smoke-test.sh
       - name: Create the GitHub release with the server jar
-        run: gh release create "$GITHUB_REF_NAME" dzdcache-server/build/libs/dzdcache-server.jar --generate-notes
+        run: |
+          awk -v version="${GITHUB_REF_NAME#v}" '$0 ~ "^## \\[" version "\\]" { found = 1; next } found && /^## \[/ { exit } found { print }' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then gh release create "$GITHUB_REF_NAME" dzdcache-server/build/libs/dzdcache-server.jar --notes-file notes.md
+          else gh release create "$GITHUB_REF_NAME" dzdcache-server/build/libs/dzdcache-server.jar --generate-notes; fi
         env:
           GH_TOKEN: ${{ github.token }}
 

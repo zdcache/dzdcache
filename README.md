@@ -24,6 +24,8 @@ The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.gi
 
 The [original discussion](DESIGN.md), [earlier service proposal](SINGLE_NODE_SERVICE.md), and [JSON adapter experiment](experiments/json-root-adapter/README.md) remain as design history.
 
+Changes between versions are listed in the [changelog](CHANGELOG.md).
+
 ## Licence
 
 [Apache License 2.0](LICENSE).
