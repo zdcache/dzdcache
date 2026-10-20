@@ -37,8 +37,26 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private record Result(SchemaView view, List<Outcome> outcomes) {
         static final Result EMPTY = new Result(null, List.of());
     }
-    private record Change(UnaryOperator<List<Member>> change, CompletableFuture<Void> done) { }
-    private record Snapshot(String id, long index, long term, List<Member> members, CacheEngine.Capture capture, long createdAt) { }
+    public record Config(List<Member> members, int size, List<Member> previousMembers, int previousSize) {
+        public boolean joint() { return previousMembers != null; }
+        boolean reached(Set<String> ids) {
+            return Quorum.reached(size, members, ids) && (!joint() || Quorum.reached(previousSize, previousMembers, ids));
+        }
+        List<Member> voters() {
+            if (!joint()) return members;
+            List<Member> all = new ArrayList<>(members);
+            for (Member member : previousMembers) if (all.stream().noneMatch(known -> known.id().equals(member.id()))) all.add(member);
+            return all;
+        }
+        boolean includes(Member member) { return voters().contains(member); }
+        static Config of(LogEntry.Membership membership) {
+            return new Config(List.copyOf(membership.members()), membership.size(),
+                membership.previousMembers() == null ? null : List.copyOf(membership.previousMembers()), membership.previousSize());
+        }
+    }
+    public record ClusterView(int size, List<Member> members, Member master, Integer previousSize, List<Member> previousMembers) { }
+    private record Change(UnaryOperator<List<Member>> change, int size, CompletableFuture<Void> done) { }
+    private record Snapshot(String id, long index, long term, List<Member> members, Config config, CacheEngine.Capture capture, long createdAt) { }
     private record Install(Message.SnapshotOffer offer, CacheEngine engine) { }
     private static final class Progress {
         long startedAt;
@@ -68,6 +86,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private final ObjectMapper mapper;
     private final ReplicatedLog log = new ReplicatedLog();
     private final Map<String, Progress> progress = new HashMap<>();
+    private final TreeMap<Long, Config> configs = new TreeMap<>();
+    private final Map<String, Member> departing = new HashMap<>();
+    private final Map<String, Long> departedAt = new HashMap<>();
     private final Set<String> inSync = new HashSet<>();
     private final Map<Long, CompletableFuture<Result>> pending = new HashMap<>();
     private final Map<Long, Result> results = new HashMap<>();
@@ -134,6 +155,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         Gauge.builder("dzdcache.applied.index", this, coordinator -> coordinator.appliedIndex).register(meters);
         Gauge.builder("dzdcache.current", this, coordinator -> coordinator.current() ? 1 : 0).register(meters);
         Gauge.builder("dzdcache.cluster.size", this, coordinator -> coordinator.size()).register(meters);
+        Gauge.builder("dzdcache.resize.in.progress", this, coordinator -> coordinator.config().joint() ? 1 : 0).register(meters);
         Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).register(meters);
         Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).register(meters);
         lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
@@ -150,7 +172,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         });
     }
 
-    public boolean ready() { return installed && role != Role.STARTING && members.contains(self); }
+    public boolean ready() { return installed && role != Role.STARTING && members.contains(self) && config().includes(self); }
     public Role role() { return role; }
     public long term() { return term; }
     public Member self() { return self; }
@@ -161,6 +183,23 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public String startupProblem() { return startupProblem; }
     public boolean bootstrapping() { return role == Role.STARTING && bootstrapping && startupProblem == null; }
     public int clusterSize() { return size(); }
+    public ClusterView view() {
+        Config current = config();
+        return new ClusterView(current.size(), current.members(), master(), current.joint() ? current.previousSize() : null, current.previousMembers());
+    }
+    public String sizeWarning() {
+        int configured = properties.getClusterSize();
+        return installed && configured != size() ? "dzdcache.cluster-size is " + configured + " but the cluster has " + size()
+            + "; the configured size is only used to found a cluster" : null;
+    }
+    public void resize(int size, Set<String> leaving) { await(resizeAsync(size, leaving)); }
+    public CompletableFuture<Void> resizeAsync(int size, Set<String> leaving) {
+        return submit(new Message.ForwardResize(size, List.copyOf(leaving))).thenApply(result -> {
+            Outcome outcome = result.outcomes().getFirst();
+            if (outcome.status() != 200) throw new CacheException(outcome.status(), outcome.error());
+            return null;
+        });
+    }
     public void requireReady() { if (!ready()) throw new CacheException(503, "Cache is joining the cluster"); }
 
     public boolean current() {
@@ -234,6 +273,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             case Message.ForwardPublish request -> forwarded(request);
             case Message.ForwardPuts request -> forwarded(request);
             case Message.ForwardChange request -> forwarded(request);
+            case Message.ForwardResize request -> forwarded(request);
             case Message.LeaseRequest request -> CompletableFuture.completedFuture(onLeaseRequest(request));
             case Message.AccessReport report -> {
                 if (role != Role.MASTER) yield CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
@@ -364,6 +404,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         return switch (request) {
             case Message.ForwardPublish publish -> appendLocal(new LogEntry.Publish(publish.schema()));
             case Message.ForwardChange change -> appendLocal(new LogEntry.Mutations(List.of(change.mutation())));
+            case Message.ForwardResize resize -> resizeLocal(resize.size(), Set.copyOf(resize.leaving()));
             case Message.ForwardPuts puts -> {
                 Outcome[] outcomes = new Outcome[puts.puts().size()];
                 List<Integer> positions = new ArrayList<>();
@@ -387,6 +428,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         if (role != Role.MASTER) return CompletableFuture.failedFuture(new CacheException(503, "Not the master"));
         LogEntry entry = new LogEntry(log.lastIndex() + 1, term, timers.now(), payload);
         log.append(entry, size(entry));
+        adopt(entry);
         CompletableFuture<Result> future = new CompletableFuture<>();
         pending.put(entry.index(), future);
         timers.schedule(properties.getReplicationTimeout().toMillis() * 2, () -> {
@@ -413,8 +455,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
                     join(master);
                 }
                 if (role == Role.FOLLOWER && installed && master != null && members.contains(self) && !leaseInFlight) renewLease();
-                if (installed && members.contains(self) && now >= electionDeadline) startElection(now);
-                else if (!members.contains(self) && install == null && now - lastMasterContact > properties.getMemberTimeout().toMillis())
+                if (installed && members.contains(self) && config().includes(self) && now >= electionDeadline) startElection(now);
+                else if ((!members.contains(self) || !config().includes(self)) && install == null
+                        && now - lastMasterContact > properties.getMemberTimeout().toMillis())
                     restartMembership(now);
             }
             case MASTER -> masterTick(now);
@@ -466,7 +509,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
             else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
                 conflict[0] = "Another node at " + peer + " uses the node id " + self.id();
-            else if (reply instanceof Message.Leader leader && leader.clusterSize() != size())
+            else if (reply instanceof Message.Leader leader && !leader.member() && leader.clusterSize() != size())
                 conflict[0] = "This node is configured with cluster-size " + size() + ", but the node at " + peer + " has " + leader.clusterSize();
             else if (reply instanceof Message.Leader leader) {
                 answered[0]++;
@@ -500,7 +543,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         term = Math.max(term, 0) + 1;
         votedFor = self.id();
         becomeMaster(timers.now());
-        appendLocal(new LogEntry.Membership(members));
+        appendLocal(new LogEntry.Membership(members, properties.getClusterSize()));
         LOG.info("Founded a cluster as {} with {}", self.id(), memberIds());
     }
 
@@ -524,6 +567,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         clusterId = null;
         holder.replace(holder.fresh());
         log.reset(0, 0);
+        configs.clear();
         commitIndex = 0;
         appliedIndex = 0;
         installed = false;
@@ -553,8 +597,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
                 if (elected()) becomeMaster(timers.now());
             }
         });
-        Message.Vote request = new Message.Vote(electionTerm, self, log.lastIndex(), log.lastTerm(), memberIds());
-        for (Member member : members) {
+        Message.Vote request = new Message.Vote(electionTerm, self, log.lastIndex(), log.lastTerm(),
+            config().voters().stream().map(Member::id).sorted().toList());
+        for (Member member : config().voters()) {
             if (member.id().equals(self.id())) continue;
             send(member.url(), request, reply -> {
                 if (!(reply instanceof Message.Voted voted)) return;
@@ -573,15 +618,15 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
 
     private boolean elected() {
         if (witnessed()) return votes.size() >= 2;
-        return Quorum.reached(size(), members, votes) && (size() != 2 || votes.size() == 2 || syncedWithMaster);
+        return config().reached(votes) && (!twoNode() || votes.size() == 2 || syncedWithMaster);
     }
 
     private long electionTimeout() {
         long base = properties.getElectionTimeout().toMillis();
         int rank = 0;
-        for (Member member : members) if (member.olderThan(self)) rank++;
+        for (Member member : config().voters()) if (member.olderThan(self)) rank++;
         long timeout = base + rank * base / 4 + random.nextLong(base / 2 + 1);
-        return size() == 2 && rank > 0 && !witnessed() ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
+        return twoNode() && rank > 0 && !witnessed() ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
     }
 
     private void becomeMaster(long now) {
@@ -598,22 +643,24 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         leadershipStartedAt = now;
         nextSweep = now + properties.getSyncInterval().toMillis();
         progress.clear();
+        departing.clear();
+        departedAt.clear();
         inSync.clear();
-        inSync.add(self.id());
-        for (Member member : members) {
-            if (member.id().equals(self.id())) continue;
-            Progress fresh = new Progress(log.lastIndex() + 1, now);
-            fresh.startedAt = member.startedAt();
-            progress.put(member.id(), fresh);
-        }
+        syncProgress();
         LOG.info("{} is master for term {}", self.id(), term);
         appendLocal(new LogEntry.Noop());
         refreshMasterLease();
+        if (config().joint()) {
+            Config inherited = config();
+            changeInFlight = true;
+            LOG.info("{} finishes the resize to {} that the previous master started", self.id(), inherited.size());
+            commitConfig(new LogEntry.Membership(inherited.members(), inherited.size()), new CompletableFuture<>());
+        }
     }
 
     private static long leaseWait(long millis) { return millis + millis / 8; }
 
-    private boolean witnessed() { return size() == 2 && properties.getWitnessUrl() != null; }
+    private boolean witnessed() { return twoNode() && properties.getWitnessUrl() != null; }
 
     private void claimWitness(long claimTerm, Consumer<Boolean> done) {
         long sentAt = timers.elapsed();
@@ -641,6 +688,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             resyncRequired = true;
         } else {
             log.truncateFrom(keep + 1);
+            configs.tailMap(keep + 1, true).clear();
             commitIndex = keep;
             appliedIndex = keep;
         }
@@ -672,7 +720,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         for (long time : times) {
             Set<String> ids = new HashSet<>();
             confirmed.forEach((id, at) -> { if (at >= time) ids.add(id); });
-            if (Quorum.reached(size(), members, ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
+            if (config().reached(ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
         }
         masterLeaseUntil = Long.MIN_VALUE / 2;
     }
@@ -695,7 +743,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private Message onLeaseRequest(Message.LeaseRequest request) {
         long now = timers.elapsed();
         Member member = request.member();
-        boolean granted = role == Role.MASTER && request.term() == term && members.contains(member) && inSync.contains(member.id())
+        boolean granted = role == Role.MASTER && request.term() == term && config().includes(member) && inSync.contains(member.id())
             && now >= servingFrom && now < masterLeaseUntil && ackedIndex >= noopIndex;
         if (!granted) return new Message.Lease(term, 0, 0);
         long millis = Math.min(properties.getReadLease().toMillis(), masterLeaseUntil - now);
@@ -742,6 +790,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         if (led) role = Role.FOLLOWER;
         master = null;
         progress.clear();
+        departing.clear();
+        departedAt.clear();
         inSync.clear();
         if (restartTimer || led) electionDeadline = timers.now() + electionTimeout();
         failPending();
@@ -760,7 +810,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private void masterTick(long now) {
         long replicationTimeout = properties.getReplicationTimeout().toMillis();
         Set<String> contacted = new HashSet<>(Set.of(self.id()));
-        for (Member member : members) {
+        for (Member member : config().voters()) {
             if (member.id().equals(self.id())) continue;
             Progress p = progress.get(member.id());
             if (p == null) continue;
@@ -771,14 +821,15 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             replicate(member, p);
         }
         if (witnessed() && !witnessInFlight) claimWitness(term, granted -> { });
+        informDeparting();
         advanceCommit();
         refreshMasterLease();
         acknowledge();
         reachable = 1 + progress.values().stream().filter(p -> now - p.lastAck < properties.getElectionTimeout().toMillis()).count();
         long last = log.lastIndex();
-        lag.register(members.stream().filter(member -> !member.id().equals(self.id()) && progress.containsKey(member.id()))
+        lag.register(config().voters().stream().filter(member -> !member.id().equals(self.id()) && progress.containsKey(member.id()))
             .map(member -> MultiGauge.Row.of(Tags.of("member", member.id()), last - progress.get(member.id()).matchIndex)).toList(), true);
-        if (!Quorum.reached(size(), members, contacted)) {
+        if (!config().reached(contacted)) {
             LOG.warn("{} lost contact with a quorum and steps down", self.id());
             stepDown(term);
             return;
@@ -789,7 +840,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         }
         if (now >= nextProbe) { nextProbe = now + properties.getMemberTimeout().toMillis(); probeOtherClusters(); }
         if (snapshot != null && now - snapshot.createdAt() > SNAPSHOT_REUSE * 2) snapshot = null;
-        log.compact(appliedIndex, properties.getLogRetentionBytes());
+        compact();
     }
 
     private void probeOtherClusters() {
@@ -822,11 +873,12 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
 
     private void replicateAll() {
         if (role != Role.MASTER) return;
-        for (Member member : members) {
+        for (Member member : config().voters()) {
             if (member.id().equals(self.id())) continue;
             Progress p = progress.get(member.id());
             if (p != null) replicate(member, p);
         }
+        informDeparting();
     }
 
     private void replicate(Member member, Progress p) {
@@ -870,11 +922,11 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         if (reply.success()) {
             p.matchIndex = Math.max(p.matchIndex, reply.matchIndex());
             p.nextIndex = p.matchIndex + 1;
-            if (size() == 2) {
+            if (twoNode()) {
                 sharedIndex = Math.max(sharedIndex, p.matchIndex);
                 if (sharedIndex >= appliedIndex && this.holder.engine().recordingUndo()) this.holder.engine().endUndo();
             }
-            if (!lagging(p, timers.now())) inSync.add(member.id());
+            if (!lagging(p, timers.now()) && !departing.containsKey(member.id())) inSync.add(member.id());
             advanceCommit();
             if (p.nextIndex <= log.lastIndex() || p.sentCommit < commitIndex) replicate(member, p);
         } else {
@@ -884,10 +936,10 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     }
 
     private void advanceCommit() {
-        if (role != Role.MASTER || !Quorum.reached(size(), members, inSync)) return;
+        if (role != Role.MASTER || !config().reached(inSync)) return;
         long candidate = log.lastIndex();
         for (String id : inSync) {
-            if (id.equals(self.id())) continue;
+            if (id.equals(self.id()) || departing.containsKey(id)) continue;
             Progress p = progress.get(id);
             if (p != null) candidate = Math.min(candidate, p.matchIndex);
         }
@@ -901,7 +953,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private void applyCommitted() {
         while (appliedIndex < commitIndex && appliedIndex + 1 <= log.lastIndex()) {
             LogEntry entry = log.get(appliedIndex + 1);
-            if (size() == 2 && role == Role.MASTER && entry.index() > sharedIndex && !holder.engine().recordingUndo()) {
+            if (twoNode() && role == Role.MASTER && entry.index() > sharedIndex && !holder.engine().recordingUndo()) {
                 holder.engine().beginUndo();
                 undoFrom = sharedIndex;
             }
@@ -937,7 +989,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             }
             case LogEntry.Accesses accesses -> { engine.touch(accesses.accesses()); yield Result.EMPTY; }
             case LogEntry.Sweep ignored -> { engine.sweep(entry.at()); yield Result.EMPTY; }
-            case LogEntry.Membership membership -> { applyMembership(membership.members()); yield Result.EMPTY; }
+            case LogEntry.Membership membership -> { applyMembership(Config.of(membership).voters()); yield new Result(null, List.of(Outcome.applied(null))); }
             case LogEntry.Noop ignored -> Result.EMPTY;
         };
     }
@@ -947,29 +999,10 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         members = List.copyOf(next);
         for (Member member : members) if (!member.id().equals(self.id())) knownPeers.add(member.url());
         boolean is = members.contains(self);
-        if (role == Role.MASTER) {
-            Set<String> ids = new HashSet<>();
-            for (Member member : members) ids.add(member.id());
-            progress.keySet().retainAll(ids);
-            inSync.retainAll(ids);
-            inSync.add(self.id());
-            for (Member member : members) {
-                if (member.id().equals(self.id())) continue;
-                Progress current = progress.get(member.id());
-                if (current == null || current.startedAt != member.startedAt()) {
-                    Progress fresh = new Progress(log.lastIndex() + 1, timers.now());
-                    fresh.startedAt = member.startedAt();
-                    progress.put(member.id(), fresh);
-                    inSync.remove(member.id());
-                }
-            }
-            changeInFlight = false;
-            if (!is) {
-                stepDown(term);
-                if (!closed) restartMembership(timers.now());
-                return;
-            }
-            nextChange();
+        if (role == Role.MASTER && !is && !config().includes(self)) {
+            stepDown(term);
+            if (!closed) restartMembership(timers.now());
+            return;
         }
         if (was && !is && !closed) restartMembership(timers.now());
         else if (is && role == Role.FOLLOWER && master != null && !members.contains(master)) {
@@ -978,25 +1011,66 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         }
     }
 
-    private CompletableFuture<Void> changeMembership(UnaryOperator<List<Member>> change) {
+    private CompletableFuture<Void> changeMembership(UnaryOperator<List<Member>> change) { return changeMembership(change, 0); }
+
+    private CompletableFuture<Void> changeMembership(UnaryOperator<List<Member>> change, int size) {
         CompletableFuture<Void> done = new CompletableFuture<>();
-        changes.add(new Change(change, done));
+        changes.add(new Change(change, size, done));
         nextChange();
         return done;
     }
 
     private void nextChange() {
-        while (!changeInFlight && role == Role.MASTER && !changes.isEmpty()) {
+        while (!changeInFlight && role == Role.MASTER && !changes.isEmpty() && !config().joint()) {
             Change change = changes.poll();
-            List<Member> next = change.change().apply(members);
-            if (next.equals(members)) { change.done().complete(null); continue; }
+            Config current = config();
+            List<Member> next = change.change().apply(current.members());
+            int size = change.size() > 0 ? change.size() : current.size();
+            if (next.equals(current.members()) && size == current.size()) { change.done().complete(null); continue; }
+            if (next.size() > size) {
+                change.done().completeExceptionally(new CacheException(409, next.size() + " members do not fit a cluster of " + size
+                    + (change.size() > 0 ? "; name the members that leave" : "; resize the cluster first")));
+                continue;
+            }
             changeInFlight = true;
-            appendLocal(new LogEntry.Membership(next)).whenComplete((result, error) -> {
-                changeInFlight = false;
-                if (error != null) change.done().completeExceptionally(error); else change.done().complete(null);
-                nextChange();
-            });
+            boolean joint = size != current.size() || current.members().stream().anyMatch(member -> !next.contains(member)) && change.size() > 0;
+            commitConfig(joint ? new LogEntry.Membership(next, size, current.members(), current.size())
+                : new LogEntry.Membership(next, size), change.done());
         }
+    }
+
+    private void commitConfig(LogEntry.Membership membership, CompletableFuture<Void> done) {
+        appendLocal(membership).whenComplete((result, error) -> {
+            if (error == null && membership.previousMembers() != null && role == Role.MASTER) {
+                commitConfig(new LogEntry.Membership(membership.members(), membership.size()), done);
+                return;
+            }
+            changeInFlight = false;
+            if (error != null) done.completeExceptionally(error); else done.complete(null);
+            nextChange();
+        });
+    }
+
+    private CompletableFuture<Result> resizeLocal(int size, Set<String> leaving) {
+        Config current = config();
+        Set<String> ids = new HashSet<>();
+        for (Member member : current.members()) ids.add(member.id());
+        String invalid = size < 1 ? "The size must be at least 1"
+            : !ids.containsAll(leaving) ? "Only members can leave; the members are " + new TreeSet<>(ids)
+            : ids.size() - leaving.size() > size ? (ids.size() - leaving.size()) + " members would remain in a cluster of " + size
+                + "; name the members that leave"
+            : null;
+        if (invalid != null) return CompletableFuture.completedFuture(new Result(null, List.of(new Outcome(400, invalid, null))));
+        if (current.joint() || changeInFlight && changes.stream().anyMatch(change -> change.size() > 0))
+            return CompletableFuture.completedFuture(new Result(null, List.of(new Outcome(409, "A resize is already in progress", null))));
+        LOG.info("{} resizes the cluster from {} to {}{}", self.id(), current.size(), size, leaving.isEmpty() ? "" : ", removing " + new TreeSet<>(leaving));
+        return changeMembership(list -> list.stream().filter(member -> !leaving.contains(member.id())).toList(), size)
+            .handle((done, error) -> {
+                if (error == null) return new Result(null, List.of(Outcome.applied(null)));
+                Throwable cause = error instanceof java.util.concurrent.CompletionException ? error.getCause() : error;
+                if (cause instanceof CacheException refused) return new Result(null, List.of(new Outcome(refused.status(), refused.getMessage(), null)));
+                throw new java.util.concurrent.CompletionException(cause);
+            });
     }
 
     private static List<Member> without(List<Member> list, String id) {
@@ -1006,14 +1080,12 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private CompletableFuture<Message> onJoin(Message.Join join) {
         if (role != Role.MASTER) return CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
         Member joining = join.member();
-        if (join.clusterSize() != size())
-            return CompletableFuture.completedFuture(new Message.Refused(409, "Node " + joining.id() + " is configured with cluster-size "
-                + join.clusterSize() + ", but the cluster has " + size()));
-        Optional<Member> existing = members.stream().filter(member -> member.id().equals(joining.id())).findFirst();
+        Config current = config();
+        Optional<Member> existing = current.members().stream().filter(member -> member.id().equals(joining.id())).findFirst();
         if (existing.isPresent() && existing.get().equals(joining)) return CompletableFuture.completedFuture(new Message.Ack());
-        if (existing.isEmpty() && members.size() >= size())
-            return CompletableFuture.completedFuture(new Message.Refused(409, "The cluster already has its " + size()
-                + " configured members, and " + joining.id() + " is not one of them"));
+        if (existing.isEmpty() && current.members().size() >= current.size())
+            return CompletableFuture.completedFuture(new Message.Refused(409, "The cluster already has its " + current.size()
+                + " members, and " + joining.id() + " is not one of them; resize the cluster first"));
         return changeMembership(list -> {
             List<Member> next = new ArrayList<>();
             boolean replaced = false;
@@ -1023,7 +1095,12 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             }
             if (!replaced) next.add(joining);
             return List.copyOf(next);
-        }).handle((done, error) -> error == null ? new Message.Ack() : new Message.Refused(503, "Join did not commit"));
+        }).handle((done, error) -> {
+            if (error == null) return new Message.Ack();
+            Throwable cause = error instanceof java.util.concurrent.CompletionException ? error.getCause() : error;
+            return cause instanceof CacheException refused && refused.status() == 409 ? new Message.Refused(409, refused.getMessage())
+                : new Message.Refused(503, "Join did not commit");
+        });
     }
 
     private CompletableFuture<Message> onLeave(Message.Leave leave) {
@@ -1060,6 +1137,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         if (log.term(previous) != request.previousTerm()) {
             if (previous <= commitIndex) { resyncRequired = true; return refusal(true, false); }
             log.truncateFrom(previous);
+            configs.tailMap(previous, true).clear();
             sharedIndex = Math.min(sharedIndex, log.lastIndex());
             return new Message.Appended(term, false, 0, previous - 1, false, false, false, memberIds(), appliedIndex);
         }
@@ -1068,8 +1146,10 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
                 if (log.term(entry.index()) == entry.term()) continue;
                 if (entry.index() <= commitIndex) { resyncRequired = true; return refusal(true, false); }
                 log.truncateFrom(entry.index());
+                configs.tailMap(entry.index(), true).clear();
             }
             log.append(entry, size(entry));
+            adopt(entry);
         }
         installed = true;
         long match = previous + request.entries().size();
@@ -1078,7 +1158,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
             commitIndex = Math.min(request.commitIndex(), match);
             applyCommitted();
         }
-        log.compact(appliedIndex, properties.getLogRetentionBytes());
+        compact();
         return new Message.Appended(term, true, match, log.lastIndex(), false, false, false, memberIds(), appliedIndex);
     }
 
@@ -1089,7 +1169,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private Message onVote(Message.Vote request) {
         long now = timers.now();
         if (role == Role.STARTING) return substituteVote(request, now);
-        boolean member = members.contains(request.candidate());
+        boolean member = members.contains(request.candidate()) || config().includes(request.candidate());
         if (request.term() < term) return new Message.Voted(term, false, member, clusterId);
         long minimum = properties.getElectionTimeout().toMillis();
         if (role == Role.FOLLOWER && master != null && now - lastMasterContact < minimum) return new Message.Voted(term, false, member, clusterId);
@@ -1123,20 +1203,21 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private boolean hasQuorumContact(long now) {
         Set<String> contacted = new HashSet<>(Set.of(self.id()));
         progress.forEach((id, p) -> { if (now - p.lastAck < properties.getElectionTimeout().toMillis()) contacted.add(id); });
-        return Quorum.reached(size(), members, contacted);
+        return config().reached(contacted);
     }
 
     private void offerSnapshot(Member member, Progress p) {
         long now = timers.now();
         if (snapshot == null || now - snapshot.createdAt() > SNAPSHOT_REUSE)
-            snapshot = new Snapshot(UUID.randomUUID().toString(), appliedIndex, log.term(appliedIndex), members,
+            snapshot = new Snapshot(UUID.randomUUID().toString(), appliedIndex, log.term(appliedIndex), members, appliedConfig(),
                 holder.engine().capture(), now);
         Snapshot offered = snapshot;
         p.inFlight = true;
         long sentTerm = term;
         long sentAt = timers.elapsed();
         send(member.url(), new Message.SnapshotOffer(term, self, offered.id(), offered.index(), offered.term(), offered.members(),
-            offered.capture().descriptors(), clusterId), reply -> {
+            offered.capture().descriptors(), clusterId, offered.config().size(), offered.config().previousMembers(),
+            offered.config().previousSize()), reply -> {
                 p.inFlight = false;
                 if (role != Role.MASTER || term != sentTerm) return;
                 if (reply instanceof Message.Ack) {
@@ -1181,6 +1262,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private void finishInstall(Install target) {
         holder.replace(target.engine());
         log.reset(target.offer().index(), target.offer().indexTerm());
+        configs.clear();
+        configs.put(target.offer().index(), new Config(List.copyOf(target.offer().members()), target.offer().clusterSize(),
+            target.offer().previousMembers() == null ? null : List.copyOf(target.offer().previousMembers()), target.offer().previousSize()));
         commitIndex = target.offer().index();
         appliedIndex = target.offer().index();
         members = List.copyOf(target.offer().members());
@@ -1228,11 +1312,80 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         }
     }
 
-    private List<String> memberIds() { return members.stream().map(Member::id).sorted().toList(); }
+    private List<String> memberIds() { return config().members().stream().map(Member::id).sorted().toList(); }
 
-    private boolean pairedWith(List<String> theirs) { return size() == 2 && memberIds().equals(theirs); }
+    private boolean pairedWith(List<String> theirs) { return twoNode() && memberIds().equals(theirs); }
 
-    private int size() { return properties.getClusterSize(); }
+    private int size() { return config().size(); }
+
+    private Config config() {
+        Map.Entry<Long, Config> latest = configs.lastEntry();
+        return latest != null ? latest.getValue() : new Config(members, properties.getClusterSize(), null, 0);
+    }
+
+    private Config appliedConfig() {
+        Map.Entry<Long, Config> applied = configs.floorEntry(appliedIndex);
+        return applied != null ? applied.getValue() : config();
+    }
+
+    private boolean twoNode() { return !config().joint() && size() == 2; }
+
+    private void adopt(LogEntry entry) {
+        if (!(entry.payload() instanceof LogEntry.Membership membership)) return;
+        configs.put(entry.index(), Config.of(membership));
+        if (role == Role.MASTER) syncProgress();
+    }
+
+    private void compact() {
+        log.compact(appliedIndex, properties.getLogRetentionBytes());
+        Long base = configs.floorKey(log.baseIndex());
+        if (base != null) configs.headMap(base, false).clear();
+    }
+
+    private void syncProgress() {
+        Set<String> ids = new HashSet<>();
+        for (Member member : configs.lastEntry() == null || configs.lowerEntry(configs.lastKey()) == null ? List.<Member>of()
+                : configs.lowerEntry(configs.lastKey()).getValue().voters()) {
+            if (member.id().equals(self.id()) || config().voters().stream().anyMatch(voter -> voter.id().equals(member.id()))) continue;
+            if (!departing.containsKey(member.id())) {
+                departing.put(member.id(), member);
+                departedAt.put(member.id(), configs.lastKey());
+                if (!progress.containsKey(member.id())) progress.put(member.id(), new Progress(log.lastIndex() + 1, timers.now()));
+            }
+        }
+        for (Member member : config().voters()) {
+            ids.add(member.id());
+            if (member.id().equals(self.id())) continue;
+            Progress current = progress.get(member.id());
+            if (current == null || current.startedAt != member.startedAt()) {
+                Progress fresh = new Progress(log.lastIndex() + 1, timers.now());
+                fresh.startedAt = member.startedAt();
+                progress.put(member.id(), fresh);
+                inSync.remove(member.id());
+            }
+        }
+        departing.keySet().removeAll(ids);
+        departedAt.keySet().retainAll(departing.keySet());
+        Set<String> kept = new HashSet<>(ids);
+        kept.addAll(departing.keySet());
+        progress.keySet().retainAll(kept);
+        inSync.retainAll(ids);
+        inSync.add(self.id());
+    }
+
+    private void informDeparting() {
+        for (Iterator<Map.Entry<String, Member>> it = departing.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Member> leaving = it.next();
+            Progress p = progress.get(leaving.getKey());
+            if (p == null || (p.matchIndex >= departedAt.get(leaving.getKey()) && p.sentCommit >= departedAt.get(leaving.getKey()))) {
+                it.remove();
+                departedAt.remove(leaving.getKey());
+                progress.remove(leaving.getKey());
+                continue;
+            }
+            replicate(leaving.getValue(), p);
+        }
+    }
 
     private boolean isMember(String id) {
         for (Member member : members) if (member.id().equals(id)) return true;

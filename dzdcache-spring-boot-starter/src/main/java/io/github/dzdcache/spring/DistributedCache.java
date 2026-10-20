@@ -32,5 +32,9 @@ public final class DistributedCache {
 
     public boolean current() { return cluster.current(); }
 
+    public ClusterCoordinator.ClusterView view() { return cluster.view(); }
+
+    public void resize(int size, String... leaving) { cluster.resize(size, java.util.Set.of(leaving)); }
+
     public ClusterCoordinator cluster() { return cluster; }
 }

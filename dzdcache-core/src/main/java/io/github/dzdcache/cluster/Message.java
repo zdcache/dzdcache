@@ -26,6 +26,7 @@ import java.util.List;
     @JsonSubTypes.Type(value = Message.ForwardPublish.class, name = "forward-publish"),
     @JsonSubTypes.Type(value = Message.ForwardPuts.class, name = "forward-puts"),
     @JsonSubTypes.Type(value = Message.ForwardChange.class, name = "forward-change"),
+    @JsonSubTypes.Type(value = Message.ForwardResize.class, name = "forward-resize"),
     @JsonSubTypes.Type(value = Message.Written.class, name = "written"),
     @JsonSubTypes.Type(value = Message.AccessReport.class, name = "access-report"),
     @JsonSubTypes.Type(value = Message.LeaseRequest.class, name = "lease-request"),
@@ -42,7 +43,8 @@ public sealed interface Message {
     record Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members) implements Message { }
     record Voted(long term, boolean granted, boolean candidateIsMember, String clusterId) implements Message { }
     record SnapshotOffer(long term, Member master, String snapshotId, long index, long indexTerm, List<Member> members,
-                         List<TypeDescriptor> schemas, String clusterId) implements Message { }
+                         List<TypeDescriptor> schemas, String clusterId, int clusterSize, List<Member> previousMembers,
+                         int previousSize) implements Message { }
     record SnapshotPageRequest(String snapshotId, int from) implements Message { }
     record SnapshotPage(boolean missing, List<SnapshotRecord> records, Integer next) implements Message { }
     record WhoLeads() implements Message { }
@@ -53,6 +55,7 @@ public sealed interface Message {
     record ForwardPublish(TypeDescriptor schema) implements Message { }
     record ForwardPuts(List<PutRequest> puts) implements Message { }
     record ForwardChange(EntryMutation mutation) implements Message { }
+    record ForwardResize(int size, List<String> leaving) implements Message { }
     record Written(SchemaView view, List<ClusterCoordinator.Outcome> outcomes) implements Message { }
     record AccessReport(List<Access> accesses) implements Message { }
     record LeaseRequest(long term, Member member, long appliedIndex) implements Message { }

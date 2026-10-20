@@ -3,6 +3,7 @@ package io.github.dzdcache.spring;
 import io.github.dzdcache.cache.CacheException;
 import io.github.dzdcache.cache.EngineHolder;
 import io.github.dzdcache.cluster.HttpRaftTransport;
+import io.github.dzdcache.cluster.Member;
 import io.github.dzdcache.cluster.Message;
 import io.github.dzdcache.cluster.RaftTransport;
 import io.github.dzdcache.config.ServiceProperties;
@@ -215,8 +216,10 @@ class DzdCacheStarterTest {
         assertThat(answered).isPositive();
     }
 
-    @Test void aNodeConfiguredWithAnotherClusterSizeDoesNotJoin() throws Exception {
+    @Test void aClusterGrowsAndShrinksLiveAndKeepsItsData() throws Exception {
         var started = start(Students.class, Students.class);
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        students(started.get(0)).put(new Student(1, "Anna", "Oslo", 22));
         int port;
         try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
         List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-x",
@@ -225,12 +228,27 @@ class DzdCacheStarterTest {
         int peer = 0;
         for (ConfigurableApplicationContext node : started)
             args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + node.getBean(ServiceProperties.class).getClusterPort());
-        ConfigurableApplicationContext stranger = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new));
-        nodes.add(stranger);
-        await(() -> cluster(stranger).startupProblem() != null);
-        assertThat(cluster(stranger).startupProblem()).contains("cluster-size 3", "has 2");
-        assertThat(cluster(stranger).ready()).isFalse();
-        assertThat(cluster(started.get(0)).members()).hasSize(2);
+        ConfigurableApplicationContext third = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new));
+        nodes.add(third);
+        await(() -> cluster(third).startupProblem() != null);
+        assertThat(cluster(third).startupProblem()).contains("2 members", "resize the cluster first");
+
+        started.get(1).getBean(DistributedCache.class).resize(3);
+        await(() -> third.getBean(DistributedCache.class).current());
+        assertThat(cluster(started.get(0)).view().size()).isEqualTo(3);
+        assertThat(cluster(started.get(0)).view().members()).hasSize(3);
+        assertThat(students(third).get(1L)).isEqualTo(new Student(1, "Anna", "Oslo", 22));
+        assertThat(cluster(third).sizeWarning()).isNull();
+        assertThat(cluster(started.get(0)).sizeWarning()).contains("cluster-size is 2", "has 3");
+
+        third.getBean(DistributedCache.class).resize(2, "node-x");
+        await(() -> !third.getBean(DistributedCache.class).ready());
+        assertThat(cluster(started.get(0)).view().size()).isEqualTo(2);
+        assertThat(cluster(started.get(0)).view().members()).extracting(Member::id).containsExactlyInAnyOrder("node-0", "node-1");
+        assertThat(students(started.get(1)).put(new Student(2, "Berit", "Bergen", 30))).isEqualTo(1);
+        await(() -> students(started.get(0)).get(2L) != null);
+        assertThatThrownBy(() -> started.get(0).getBean(DistributedCache.class).resize(1)).isInstanceOf(CacheException.class)
+            .hasMessageContaining("name the members that leave");
     }
 
     @Test void withAWitnessTwoInstancesSurviveABrokenLinkWithOneMasterAndThenTheMasterStopping() throws Exception {

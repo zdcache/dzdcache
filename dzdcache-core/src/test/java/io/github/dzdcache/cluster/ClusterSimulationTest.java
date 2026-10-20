@@ -344,6 +344,234 @@ class ClusterSimulationTest {
         }
     }
 
+    private static void resize(SimulatedCluster cluster, String via, int size, String... leaving) {
+        CompletableFuture<Void> done = cluster.nodes.get(via).coordinator.resizeAsync(size, Set.of(leaving));
+        assertThat(cluster.runUntil(done::isDone, 20_000)).as("resize to " + size).isTrue();
+        assertThat(done).as("resize to " + size).isCompleted();
+    }
+    private static boolean settled(SimulatedCluster cluster, int size) {
+        return cluster.live().stream().filter(node -> node.coordinator.ready())
+            .allMatch(node -> node.coordinator.view().size() == size && node.coordinator.view().previousSize() == null);
+    }
+
+    @Test void aClusterGrowsFromThreeToFiveAndShrinksBackWithoutLosingAWrite() {
+        SimulatedCluster cluster = new SimulatedCluster(24);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.configure("a", "b", "c", "d", "e");
+        cluster.properties.setClusterSize(3);
+        for (String id : List.of("a", "b", "c")) { cluster.start(id); cluster.run(10); }
+        assertThat(cluster.runUntil(() -> List.of("a", "b", "c").stream().allMatch(id -> cluster.nodes.get(id).coordinator.current()), 30_000)).isTrue();
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 5; id++) assertThat(status(cluster.await(tracked(cluster, "b", id, 1), 5_000))).isEqualTo(200);
+
+        resize(cluster, "c", 5);
+        assertThat(settled(cluster, 5)).isTrue();
+        for (String id : List.of("d", "e")) cluster.start(id);
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 20_000)).isTrue();
+        assertThat(a.coordinator.members()).hasSize(5);
+        for (long id = 6; id <= 10; id++) assertThat(status(cluster.await(tracked(cluster, "d", id, 1), 5_000))).isEqualTo(200);
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(cluster.read(node, 3)).isEqualTo(1L);
+
+        resize(cluster, "e", 3, "d", "e");
+        assertThat(cluster.runUntil(() -> !cluster.nodes.get("d").coordinator.ready() && !cluster.nodes.get("e").coordinator.ready()
+            && cluster.nodes.get("d").coordinator.startupProblem() != null, 20_000)).isTrue();
+        assertThat(a.coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c");
+        assertThat(status(cluster.await(tracked(cluster, "c", 11, 1), 5_000))).isEqualTo(200);
+        assertThat(settled(cluster, 3)).isTrue();
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+        assertThat(cluster.staleReads).isEmpty();
+    }
+
+    @Test void aPairGrowsToThreeAndShrinksBackToTheTwoNodeRules() {
+        SimulatedCluster cluster = new SimulatedCluster(25);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.configure("a", "b", "c");
+        cluster.properties.setClusterSize(2);
+        for (String id : List.of("a", "b")) { cluster.start(id); cluster.run(10); }
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+        cluster.await(cluster.nodes.get("a").coordinator.publishAsync(students), 5_000);
+        resize(cluster, "b", 3);
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(c.coordinator::current, 20_000)).isTrue();
+        cluster.crash("a");
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1, 10_000)).as("three nodes survive one failure").isTrue();
+        assertThat(status(cluster.await(tracked(cluster, "c", 1, 1), 5_000))).isEqualTo(200);
+        cluster.start("a");
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 20_000)).isTrue();
+        resize(cluster, "a", 2, "c");
+        assertThat(settled(cluster, 2)).isTrue();
+        assertThat(cluster.runUntil(() -> !c.coordinator.ready(), 10_000)).isTrue();
+        assertIdentical(cluster);
+        assertThat(cluster.violations).isEmpty();
+        assertThat(cluster.staleReads).isEmpty();
+    }
+
+    @Test void aResizeThatCannotReachTheNewQuorumFinishesOnceTheMissingNodeReturns() {
+        SimulatedCluster cluster = new SimulatedCluster(26);
+        cluster.configure("a", "b", "c", "d", "e");
+        cluster.properties.setClusterSize(3);
+        for (String id : List.of("a", "b", "c")) { cluster.start(id); cluster.run(10); }
+        assertThat(cluster.runUntil(() -> List.of("a", "b", "c").stream().allMatch(id -> cluster.nodes.get(id).coordinator.current()), 30_000)).isTrue();
+        SimulatedCluster.Node master = master(cluster);
+        String down = List.of("a", "b", "c").stream().filter(id -> !id.equals(master.id)).findFirst().orElseThrow();
+        cluster.crash(down);
+        CompletableFuture<Void> growing = master.coordinator.resizeAsync(5, Set.of());
+        cluster.run(10_000);
+        assertThat(settled(cluster, 5)).as("five needs three of the existing three").isFalse();
+        cluster.start(down);
+        assertThat(cluster.runUntil(() -> settled(cluster, 5) && cluster.live().stream().allMatch(node -> node.coordinator.ready()), 30_000)).isTrue();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aNewMasterFinishesAResizeThatThePreviousMasterLeftHalfDone() {
+        SimulatedCluster cluster = new SimulatedCluster(27);
+        cluster.configure("a", "b", "c", "d", "e");
+        for (String id : List.of("a", "b", "c", "d", "e")) { cluster.start(id); cluster.run(10); }
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+        SimulatedCluster.Node master = master(cluster);
+        master.coordinator.resizeAsync(4, Set.of("e"));
+        assertThat(cluster.runUntil(() -> cluster.live().stream().filter(node -> node != master)
+            .filter(node -> node.coordinator.view().previousSize() != null).count() >= 3, 5_000)).as("the joint entry reached a quorum").isTrue();
+        cluster.crash(master.id);
+        assertThat(cluster.runUntil(() -> cluster.live().stream().filter(node -> node.coordinator.ready())
+            .allMatch(node -> node.coordinator.view().size() == 4 && node.coordinator.view().previousSize() == null)
+            && cluster.mastersNow().size() == 1, 30_000)).isTrue();
+        assertThat(cluster.mastersNow().getFirst().coordinator.view().members()).extracting(Member::id).doesNotContain("e");
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aSecondResizeWhileOneIsInProgressIsRefused() {
+        SimulatedCluster cluster = new SimulatedCluster(28);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        CompletableFuture<Void> first = a.coordinator.resizeAsync(5, Set.of());
+        CompletableFuture<Void> second = a.coordinator.resizeAsync(4, Set.of());
+        cluster.runUntil(second::isDone, 10_000);
+        assertThat(second).isCompletedExceptionally();
+        assertThat(second.exceptionNow()).hasMessageContaining("already in progress");
+        assertThat(cluster.runUntil(first::isDone, 10_000)).isTrue();
+        assertThat(first).isCompleted();
+    }
+
+    @Test void aShrinkStartedOnTheMinoritySideOfAPartitionCannotCompleteThere() {
+        SimulatedCluster cluster = new SimulatedCluster(29);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d", "e");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node master = master(cluster);
+        List<String> minority = new ArrayList<>(List.of(master.id));
+        List<String> rest = new ArrayList<>(List.of("a", "b", "c", "d", "e"));
+        rest.remove(master.id);
+        minority.add(rest.removeFirst());
+        cluster.partition(rest);
+        CompletableFuture<Void> shrink = master.coordinator.resizeAsync(3, Set.copyOf(rest.subList(1, 3)));
+        for (long id = 1; id <= 5; id++) {
+            tracked(cluster, minority.get(1), id, 1);
+            tracked(cluster, rest.getFirst(), 100 + id, 1);
+            cluster.run(300);
+        }
+        cluster.run(8_000);
+        assertThat(shrink.isDone() && !shrink.isCompletedExceptionally()).as("the minority cannot finish the resize").isFalse();
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1 && cluster.live().stream()
+            .filter(node -> node.coordinator.ready()).allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+        for (SimulatedCluster.Node node : cluster.live()) for (long id : List.of(1L, 2L, 101L, 102L, 105L)) cluster.read(node, id);
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void unboundedPartitionsDuringResizesNeverGiveATermTwoMastersOrAStaleRead() {
+        for (long seed = 600; seed < 620; seed++) {
+            SimulatedCluster cluster = new SimulatedCluster(seed);
+            TypeDescriptor students = cluster.students(100_000);
+            List<String> ids = List.of("n0", "n1", "n2", "n3", "n4");
+            cluster.configure(ids.toArray(String[]::new));
+            for (String id : ids) { cluster.start(id); cluster.run(10); }
+            assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+            cluster.await(cluster.nodes.get("n0").coordinator.publishAsync(students), 5_000);
+            Random random = new Random(seed);
+            long[] revision = new long[20];
+            for (int step = 0; step < 200; step++) {
+                List<SimulatedCluster.Node> live = cluster.live();
+                int action = random.nextInt(100);
+                if (action < 12) {
+                    List<String> side = new ArrayList<>();
+                    for (String id : ids) if (random.nextBoolean()) side.add(id);
+                    cluster.partition(side);
+                } else if (action < 20) cluster.heal();
+                else if (action < 30) {
+                    SimulatedCluster.Node via = live.get(random.nextInt(live.size()));
+                    int size = 3 + random.nextInt(3);
+                    Set<String> leaving = new HashSet<>();
+                    for (Member member : via.coordinator.view().members()) if (ids.indexOf(member.id()) >= size) leaving.add(member.id());
+                    via.coordinator.resizeAsync(size, leaving);
+                    for (String id : ids.subList(0, size)) if (!cluster.nodes.get(id).alive) cluster.start(id);
+                } else {
+                    long id = random.nextInt(20);
+                    tracked(cluster, live.get(random.nextInt(live.size())).id, id, ++revision[(int) id]);
+                }
+                for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(20));
+                cluster.run(random.nextInt(400));
+            }
+            cluster.heal();
+            cluster.run(40_000);
+            String label = "seed " + seed;
+            assertThat(cluster.violations).as(label).isEmpty();
+            assertThat(cluster.staleReads).as(label).isEmpty();
+            assertThat(cluster.mastersNow()).as(label).hasSize(1);
+        }
+    }
+
+    @Test void randomResizesUnderFailuresKeepOneMasterPerTermAndNeverServeAStaleRead() {
+        for (long seed = 500; seed < 510; seed++) {
+            SimulatedCluster cluster = new SimulatedCluster(seed);
+            TypeDescriptor students = cluster.students(100_000);
+            List<String> ids = List.of("n0", "n1", "n2", "n3", "n4");
+            cluster.configure(ids.toArray(String[]::new));
+            cluster.properties.setClusterSize(3);
+            for (String id : ids.subList(0, 3)) { cluster.start(id); cluster.run(10); }
+            assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+            cluster.await(cluster.nodes.get("n0").coordinator.publishAsync(students), 5_000);
+            Random random = new Random(seed);
+            long[] revision = new long[20];
+            String faulty = null;
+            for (int step = 0; step < 250; step++) {
+                List<SimulatedCluster.Node> live = cluster.live();
+                int action = random.nextInt(100);
+                if (action < 6 && faulty == null) {
+                    SimulatedCluster.Node victim = live.get(random.nextInt(live.size()));
+                    faulty = victim.id;
+                    if (random.nextBoolean()) cluster.crash(victim.id); else cluster.isolate(victim.id);
+                } else if (action < 12 && faulty != null) {
+                    cluster.heal();
+                    if (!cluster.nodes.get(faulty).alive) cluster.start(faulty);
+                    faulty = null;
+                } else if (action < 16) {
+                    SimulatedCluster.Node via = live.get(random.nextInt(live.size()));
+                    int size = 3 + random.nextInt(3);
+                    Set<String> leaving = new HashSet<>();
+                    for (Member member : via.coordinator.view().members()) if (ids.indexOf(member.id()) >= size) leaving.add(member.id());
+                    via.coordinator.resizeAsync(size, leaving);
+                    for (String id : ids.subList(0, size)) if (cluster.nodes.get(id) == null || !cluster.nodes.get(id).alive && !id.equals(faulty)) cluster.start(id);
+                } else {
+                    long id = random.nextInt(20);
+                    tracked(cluster, live.get(random.nextInt(live.size())).id, id, ++revision[(int) id]);
+                }
+                for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(20));
+                cluster.run(random.nextInt(500));
+            }
+            cluster.heal();
+            if (faulty != null && !cluster.nodes.get(faulty).alive) cluster.start(faulty);
+            cluster.run(40_000);
+            String label = "seed " + seed;
+            assertThat(cluster.violations).as(label).isEmpty();
+            assertThat(cluster.staleReads).as(label).isEmpty();
+            assertThat(cluster.mastersNow()).as(label).hasSize(1);
+            assertIdentical(cluster);
+        }
+    }
+
     @Test void aJoiningNodeInstallsASnapshotWhenTheLogNoLongerReachesBack() {
         SimulatedCluster cluster = new SimulatedCluster(7);
         TypeDescriptor students = cluster.students(1_000);
@@ -398,7 +626,7 @@ class ClusterSimulationTest {
 
         SimulatedCluster.Node stranger = cluster.start("e");
         assertThat(cluster.runUntil(() -> stranger.coordinator.startupProblem() != null, 20_000)).isTrue();
-        assertThat(stranger.coordinator.startupProblem()).contains("4 configured members");
+        assertThat(stranger.coordinator.startupProblem()).contains("4 members", "resize the cluster first");
         assertThat(stranger.coordinator.ready()).isFalse();
         assertThat(a.coordinator.members()).extracting(Member::id).doesNotContain("e");
     }

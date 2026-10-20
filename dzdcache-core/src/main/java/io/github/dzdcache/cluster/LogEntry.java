@@ -20,7 +20,9 @@ public record LogEntry(long index, long term, long at, Payload payload) {
     public record Publish(TypeDescriptor schema) implements Payload { }
     public record Mutations(List<EntryMutation> mutations) implements Payload { }
     public record Accesses(List<Access> accesses) implements Payload { }
-    public record Membership(List<Member> members) implements Payload { }
+    public record Membership(List<Member> members, int size, List<Member> previousMembers, int previousSize) implements Payload {
+        public Membership(List<Member> members, int size) { this(members, size, null, 0); }
+    }
     public record Sweep() implements Payload { }
     public record Noop() implements Payload { }
 }
