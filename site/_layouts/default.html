@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page.title | default: site.title }}</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface-1: #fcfcfb;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --code: rgba(11, 11, 11, 0.05);
+    --link: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface-1: #1a1a19;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --code: rgba(255, 255, 255, 0.07);
+      --link: #6da7ec;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  header {
+    display: flex; gap: 20px; align-items: center;
+    padding: 14px 32px; border-bottom: 1px solid var(--border); font-size: 14px;
+  }
+  header .name { font-weight: 600; color: var(--text-primary); }
+  header a { color: var(--text-secondary); text-decoration: none; }
+  header a:hover, header a[aria-current="page"] { color: var(--text-primary); }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 32px 64px; }
+  a { color: var(--link); }
+  h1 { font-size: 28px; margin: 12px 0 8px; }
+  h2 { font-size: 20px; margin: 36px 0 8px; padding-top: 8px; border-top: 1px solid var(--grid); }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  p, li { color: var(--text-primary); }
+  blockquote { margin: 16px 0; padding: 8px 16px; border-left: 3px solid var(--grid); color: var(--text-secondary); background: var(--surface-1); border-radius: 0 8px 8px 0; }
+  blockquote p { color: var(--text-secondary); margin: 4px 0; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; background: var(--code); padding: 1px 5px; border-radius: 4px; }
+  pre { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; overflow-x: auto; }
+  pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; }
+  table { border-collapse: collapse; margin: 12px 0; font-size: 13px; font-variant-numeric: tabular-nums; background: var(--surface-1); display: block; overflow-x: auto; }
+  th, td { border-bottom: 1px solid var(--grid); padding: 6px 12px; text-align: left; }
+  th { color: var(--text-secondary); font-weight: 600; }
+  td[style*="right"], th[style*="right"] { text-align: right; }
+  footer { max-width: 900px; margin: 0 auto; padding: 0 32px 40px; font-size: 12px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+<header>
+  <span class="name">DZDCache</span>
+  <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>README</a>
+  <a href="{{ '/changelog/' | relative_url }}"{% if page.url == '/changelog/' %} aria-current="page"{% endif %}>Changelog</a>
+  {% if site.benchmark %}<a href="{{ '/benchmark/' | relative_url }}"{% if page.url == '/benchmark/' %} aria-current="page"{% endif %}>Benchmark report</a>{% endif %}
+  <a href="https://github.com/{{ site.github.repository_nwo | default: 'zdcache/dzdcache' }}">GitHub</a>
+</header>
+<main>
+{{ content }}
+</main>
+<footer>Generated from {{ page.source | default: 'README.md' }} on the main branch.</footer>
+</body>
+</html>

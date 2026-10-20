@@ -24,6 +24,11 @@ The build pins Spring Boot 4.1.1 and the published Maven Central artifact `io.gi
 
 The [original discussion](DESIGN.md), [earlier service proposal](SINGLE_NODE_SERVICE.md), and [JSON adapter experiment](experiments/json-root-adapter/README.md) remain as design history.
 
+## Benchmark
+
+`dzdcache-benchmark` compares dzdcache with Hazelcast, Apache Ignite, Infinispan and Redis Stack, each running three nodes. It uses the searches dzdcache is built for (people in a city, a name prefix, an age range, a city with an age range, and a tag in a nested collection), with lookups by id and writes for comparison. In-process caches, which run inside the application's JVM, are compared with each other; out-of-process services, the dzdcache server and Redis Stack, run in Docker and are compared with each other. Run `scripts/compare.sh -quick` for a short run or `scripts/compare.sh -full` on an idle machine; the report is written to `dzdcache-benchmark/build/reports/dzdcache-benchmark/report.md`, and `scripts/compare.sh -publish` publishes a full run.
+<!-- benchmark-link -->
+
 Changes between versions are listed in the [changelog](CHANGELOG.md).
 
 ## Licence
