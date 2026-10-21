@@ -52,6 +52,20 @@ put() {
   [[ "$status" == 200 ]] || fail "write of $id answered $status: $(cat "$work/body")"
 }
 ready() { kubectl -n "$NS" rollout status statefulset/dzdcache --timeout="${1:-240s}" >/dev/null; }
+exactly_ready() {
+  local count=$1 deadline=$(( $(date +%s) + ${2:-300} ))
+  while (( $(date +%s) < deadline )); do
+    local pods ready_pods
+    pods=$(kubectl -n "$NS" get pods -l app=dzdcache -o name | wc -l | tr -d ' ')
+    ready_pods=0
+    for i in $(seq 0 $((count - 1))); do
+      [[ "$(kubectl -n "$NS" get pod "dzdcache-$i" -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" == true ]] && ready_pods=$((ready_pods + 1))
+    done
+    [[ "$pods" == "$count" && "$ready_pods" == "$count" ]] && return 0
+    sleep 1
+  done
+  return 1
+}
 
 step "kind cluster $CLUSTER"
 "$KIND" get clusters 2>/dev/null | grep -qx "$CLUSTER" || "$KIND" create cluster --name "$CLUSTER" --wait 120s
@@ -111,16 +125,12 @@ put 22 Trondheim 18094
 every_pod_reads 22 Trondheim
 
 step "live resize back to three pods"
-resize '{"size":3,"leaving":["dzdcache-3","dzdcache-4"]}'
-for _ in $(seq 1 30); do
-  [[ "$(kubectl -n "$NS" get pod dzdcache-4 -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)" != true ]] && break
-  sleep 1
-done
 stop_forwards
 kubectl -n "$NS" scale statefulset dzdcache --replicas=3 >/dev/null
-ready 300s || fail "the StatefulSet did not settle on three pods"
+exactly_ready 3 || fail "the StatefulSet did not settle on three pods"
 PODS=3
 forward_pods
+resize '{"size":3,"leaving":["dzdcache-3","dzdcache-4"]}'
 every_pod_reads 7 Oslo
 every_pod_reads 22 Trondheim
 request http://127.0.0.1:18090/cache/cluster >/dev/null
@@ -130,7 +140,7 @@ step "every pod deleted at once; the volumes keep the data"
 stop_forwards
 kubectl -n "$NS" delete pod dzdcache-0 dzdcache-1 dzdcache-2 --grace-period=0 --force >/dev/null 2>&1
 sleep 5
-ready 300s || fail "the StatefulSet did not come back after every pod was deleted"
+exactly_ready 3 || fail "the StatefulSet did not come back after every pod was deleted"
 forward_pods
 every_pod_reads 7 Oslo
 every_pod_reads 21 Bergen
