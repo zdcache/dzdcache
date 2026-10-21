@@ -68,6 +68,7 @@ Values are converted with the service's `ObjectMapper` when there is exactly one
 | `dzdcache.discovery.static-peers` | empty |
 | `dzdcache.discovery.namespace`, `dzdcache.discovery.service-name` | `default`, `dzdcache-peers` |
 | `dzdcache.cluster-port` | 7070 |
+| `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`. `http2` sends cluster traffic over HTTP/2 to `/internal/raft` on the application's own servlet web server instead, for networks that only let HTTP through; it is slower, every node must use the same transport, and peer URLs then use the application port, which cluster and API traffic share |
 | `dzdcache.cluster-token` | required unless standalone |
 
 The other `dzdcache.*` settings and their defaults are the same as for the [server](../dzdcache-server/README.md#operational-bounds).

@@ -157,6 +157,19 @@ class DzdCacheStarterTest {
             .hasStackTraceContaining("dzdcache.discovery.self-url http://localhost:7070 must use https:// because dzdcache.cluster-tls.enabled is true");
     }
 
+    @Test void http2BetweenNodesNeedsAServletWebServer() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.self-url=http://localhost:7070",
+                "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("dzdcache.cluster-transport is http2, but this application runs no servlet web server");
+    }
+
+    @Test void anUnknownClusterTransportIsRefused() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=quic", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("cluster-transport must be tcp or http2");
+    }
+
     @Test void writesResumeThroughANewMasterWhenTheMasterStops() throws Exception {
         var started = start(Students.class, Students.class, Students.class);
         ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)

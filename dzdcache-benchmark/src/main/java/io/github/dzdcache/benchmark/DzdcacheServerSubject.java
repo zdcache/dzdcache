@@ -37,13 +37,16 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
     public DzdcacheServerSubject(int capacity) {
         image = System.getProperty("dzdcache.server.image", "dzdcache-server:benchmark");
         try {
+            String transport = System.getProperty("dzdcache.benchmark.transport", "tcp");
+            int peerPort = transport.equals("tcp") ? 7070 : 8080;
             for (int i = 0; i < 3; i++) {
                 List<String> peers = new ArrayList<>();
-                for (int j = 0; j < 3; j++) if (j != i) peers.add("http://server-" + j + ":7070");
+                for (int j = 0; j < 3; j++) if (j != i) peers.add("http://server-" + j + ":" + peerPort);
                 GenericContainer<?> container = new GenericContainer<>(DockerImageName.parse(image)).withNetwork(network)
                     .withNetworkAliases("server-" + i).withExposedPorts(8080)
                     .withEnv("DZDCACHE_DISCOVERY_MODE", "static").withEnv("DZDCACHE_DISCOVERY_NODE_ID", "server-" + i)
-                    .withEnv("DZDCACHE_DISCOVERY_SELF_URL", "http://server-" + i + ":7070")
+                    .withEnv("DZDCACHE_DISCOVERY_SELF_URL", "http://server-" + i + ":" + peerPort)
+                    .withEnv("DZDCACHE_CLUSTER_TRANSPORT", transport)
                     .withEnv("DZDCACHE_DISCOVERY_STATIC_PEERS", String.join(",", peers))
                     .withEnv("DZDCACHE_API_TOKEN", TOKEN).withEnv("DZDCACHE_CLUSTER_TOKEN", "benchmark-cluster")
                     .withEnv("DZDCACHE_MAX_SEARCH_RESULTS", "1000000").withEnv("LOGGING_LEVEL_ROOT", "WARN")
@@ -114,7 +117,8 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
 
     @Override public String settings() {
         return "3 dzdcache server containers (" + image + ") on a Docker network; JSON over HTTP/1.1 from java.net.http to server 2 "
-            + "through Docker's port mapping; JSON-only registration with the same dimensions"
+            + "through Docker's port mapping; JSON-only registration with the same dimensions; between the servers "
+            + (System.getProperty("dzdcache.benchmark.transport", "tcp").equals("tcp") ? "framed TCP on the cluster port" : "HTTP/2 on Tomcat")
             + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, journal inside each container" : "");
     }
     @Override public void load(Person[] people) {

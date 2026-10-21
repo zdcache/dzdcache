@@ -6,6 +6,8 @@ spring:
       enabled: true
 server:
   shutdown: graceful
+  http2:
+    enabled: true
 management:
   endpoints:
     web:

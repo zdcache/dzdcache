@@ -31,6 +31,7 @@ val igniteJvmArgs = listOf("java.base/jdk.internal.misc", "java.base/sun.nio.ch"
         "java.base/java.text", "java.management/sun.management", "java.desktop/java.awt.font").map { "--add-opens=$it=ALL-UNNAMED" }
 val subjects = providers.gradleProperty("benchmark.subjects").orElse("")
 val persistence = providers.gradleProperty("benchmark.persistence").orElse("false")
+val transport = providers.gradleProperty("benchmark.transport").orElse("tcp")
 
 dependencies {
     implementation(platform(libs.spring.boot.dependencies))
@@ -75,6 +76,7 @@ fun JavaExec.benchmarkJvm() {
     dependsOn(buildServerImage)
     jvmArgs("-Ddzdcache.server.image=$serverImage")
     jvmArgs("-Ddzdcache.benchmark.persistence=${persistence.get()}")
+    jvmArgs("-Ddzdcache.benchmark.transport=${transport.get()}")
     jvmArgs(igniteJvmArgs)
     outputs.upToDateWhen { false }
     val dir = reports.get().asFile

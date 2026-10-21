@@ -24,8 +24,11 @@ class PersistentServerTest {
          "dimensions":[{"name":"city","path":"/city","index":"exact","type":"string"}]}
         """;
     @TempDir Path disks;
+    private String transport;
 
-    @Test void aWholeClusterStoppedAtOnceStartsAgainWithItsSchemasAndData() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"http2", "tcp"})
+    void aWholeClusterStoppedAtOnceStartsAgainWithItsSchemasAndData(String transport) throws Exception {
+        this.transport = transport;
         int[] ports = ports(6);
         List<ConfigurableApplicationContext> nodes = new ArrayList<>();
         try (HttpClient http = HttpClient.newHttpClient()) {
@@ -55,13 +58,14 @@ class PersistentServerTest {
     }
 
     private ConfigurableApplicationContext node(int i, int[] ports) {
+        boolean http2 = transport.equals("http2");
         List<String> args = new ArrayList<>(List.of("--server.port=" + ports[i], "--dzdcache.discovery.mode=static",
-            "--dzdcache.discovery.node-id=node-" + i, "--dzdcache.cluster-port=" + ports[3 + i],
-            "--dzdcache.discovery.self-url=http://localhost:" + ports[3 + i], "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",
+            "--dzdcache.cluster-transport=" + transport, "--dzdcache.discovery.node-id=node-" + i, "--dzdcache.cluster-port=" + ports[3 + i],
+            "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? ports[i] : ports[3 + i]), "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",
             "--dzdcache.persistence.enabled=true", "--dzdcache.persistence.directory=" + disks.resolve("node-" + i),
             "--logging.level.root=ERROR", "--spring.main.banner-mode=off"));
         int peer = 0;
-        for (int j = 0; j < 3; j++) if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + ports[3 + j]);
+        for (int j = 0; j < 3; j++) if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + (http2 ? ports[j] : ports[3 + j]));
         return new SpringApplicationBuilder(DzdCacheApplication.class).run(args.toArray(String[]::new));
     }
 

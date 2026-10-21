@@ -10,6 +10,8 @@ dependencies {
     api(libs.spring.boot.autoconfigure)
     implementation(libs.spring.boot.starter.jackson)
     compileOnly(libs.spring.boot.health)
+    compileOnly(platform(libs.spring.boot.dependencies))
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
     testImplementation(platform(libs.spring.boot.dependencies))
     testImplementation(libs.spring.boot.health)
     testImplementation("org.springframework.boot:spring-boot-starter-test")

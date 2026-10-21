@@ -31,6 +31,7 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfiguration(afterName = {"org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
     "org.springframework.boot.autoconfigure.ssl.SslAutoConfiguration"})
 @ConditionalOnProperty(prefix = "dzdcache", name = "enabled", matchIfMissing = true)
+@org.springframework.context.annotation.Import(Http2Cluster.class)
 public class DzdCacheAutoConfiguration {
     private record Typed(CacheType<?, ?> declaration, TypeDescriptor descriptor, JacksonRootType<?, ?> type) { }
 
@@ -85,8 +86,12 @@ public class DzdCacheAutoConfiguration {
 
     @Bean @ConditionalOnMissingBean
     RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties, DiscoveryProperties discovery,
-                                    ObjectProvider<SslBundles> bundles) {
-        return new TcpRaftTransport(mapper.mapper(), properties, clusterSsl(properties, discovery, bundles));
+                                    ObjectProvider<SslBundles> bundles, ObjectProvider<Http2Cluster.Marker> http2) {
+        SSLContext ssl = clusterSsl(properties, discovery, bundles);
+        if (http2.getIfAvailable() != null) return new Http2RaftTransport(mapper.mapper(), properties, ssl);
+        if (properties.getClusterTransport().equals("http2") && !discovery.getMode().equals("standalone"))
+            throw new IllegalStateException("dzdcache.cluster-transport is http2, but this application runs no servlet web server");
+        return new TcpRaftTransport(mapper.mapper(), properties, ssl);
     }
 
     private static SSLContext clusterSsl(ServiceProperties properties, DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
@@ -149,9 +154,11 @@ public class DzdCacheAutoConfiguration {
 
     @Bean
     DzdCacheLifecycle dzdcacheLifecycle(ClusterCoordinator cluster, ClusterServer server, DiscoveryProperties discovery,
-                                        ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper) {
+                                        ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper,
+                                        ObjectProvider<Http2Cluster.Marker> http2) {
         List<TypeDescriptor> descriptors = typed(declarations, values.getIfUnique(mapper::mapper)).stream().map(Typed::descriptor).toList();
-        return new DzdCacheLifecycle(cluster, server, !discovery.getMode().equals("standalone"), !discovery.getMode().equals("witness"), descriptors);
+        boolean clusterPort = !discovery.getMode().equals("standalone") && http2.getIfAvailable() == null;
+        return new DzdCacheLifecycle(cluster, server, clusterPort, !discovery.getMode().equals("witness"), descriptors);
     }
 
     @Bean @ConditionalOnProperty(prefix = "dzdcache.discovery", name = "mode", havingValue = "witness")

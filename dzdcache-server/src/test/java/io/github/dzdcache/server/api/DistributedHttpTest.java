@@ -32,10 +32,11 @@ class DistributedHttpTest {
     private static final String GET ="{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":42}";
     private static final String SEARCH = "{\"specification\":\"students\",\"schemaVersion\":1,\"dimension\":\"sex\",\"value\":\"female\"}";
 
-    @Test void twoNodesReplicateThroughTheMasterAndTheSurvivorTakesOverWhenOneLeaves() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"http2", "tcp"})
+    void twoNodesReplicateThroughTheMasterAndTheSurvivorTakesOverWhenOneLeaves(String transport) throws Exception {
         ConfigurableApplicationContext first = null, second = null;
         try (HttpClient http = HttpClient.newHttpClient()) {
-            Pair pair = pair(); first = pair.first(); second = pair.second();
+            Pair pair = pair(transport); first = pair.first(); second = pair.second();
             int a = pair.a(), b = pair.b(), clusterA = pair.clusterA(), clusterB = pair.clusterB();
             ready(first, second);
             assertThat(post(http, a, "/cache/schemas", SCHEMA, "client").statusCode()).isEqualTo(201);
@@ -85,7 +86,7 @@ class DistributedHttpTest {
             var empty = post(http, b, "/cache/search", SEARCH, "client");
             assertThat(empty.statusCode()).isEqualTo(200); assertThat(empty.body()).isEqualTo("[]");
 
-            second.close(); second = restart(b, clusterB, clusterA); ready(first, second);
+            second.close(); second = restart(transport, b, clusterB, clusterA, a); ready(first, second);
             assertThat(post(http, b, "/cache/entries", put(1, "Rome"), "client").statusCode()).isEqualTo(200);
             assertThat(post(http, b, "/cache/entries/get", GET, "client").statusCode()).isEqualTo(404);
             assertThat(post(http, a, "/cache/entries", put(4, "Bergen"), "client").statusCode()).isEqualTo(200);
@@ -94,7 +95,7 @@ class DistributedHttpTest {
             first.close(); first = null;
             assertThat(post(http, b, "/cache/entries", put(5, "Trondheim"), "client").statusCode()).isEqualTo(200);
             assertThat(post(http, b, "/cache/entries/get", GET, "client").body()).contains("Trondheim");
-            first = restart(a, clusterA, clusterB); ready(first, second);
+            first = restart(transport, a, clusterA, clusterB, b); ready(first, second);
             assertThat(eventually(http, a, "/cache/entries/get", GET, body -> body.contains("Trondheim")).body()).contains("Trondheim");
             assertThat(post(http, a, "/cache/entries", put(6, "Tromsø"), "client").statusCode()).isEqualTo(200);
         } finally {
@@ -143,23 +144,23 @@ class DistributedHttpTest {
     }
     private record Pair(int a, int b, int clusterA, int clusterB,
                         ConfigurableApplicationContext first, ConfigurableApplicationContext second) {}
-    private static Pair pair() throws Exception {
+    private static Pair pair(String transport) throws Exception {
         for (int attempt = 1; ; attempt++) {
             int[] ports = ports(4);
             ConfigurableApplicationContext first = null;
             try {
-                first = node(ports[0], ports[2], ports[3]);
-                return new Pair(ports[0], ports[1], ports[2], ports[3], first, node(ports[1], ports[3], ports[2]));
+                first = node(transport, ports[0], ports[2], ports[3], ports[1]);
+                return new Pair(ports[0], ports[1], ports[2], ports[3], first, node(transport, ports[1], ports[3], ports[2], ports[0]));
             } catch (RuntimeException exception) {
                 if (first != null) first.close();
                 if (attempt == 5 || !portInUse(exception)) throw exception;
             }
         }
     }
-    private static ConfigurableApplicationContext restart(int port, int clusterPort, int peerClusterPort) throws Exception {
+    private static ConfigurableApplicationContext restart(String transport, int port, int clusterPort, int peerClusterPort, int peerPort) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (true) {
-            try { return node(port, clusterPort, peerClusterPort); }
+            try { return node(transport, port, clusterPort, peerClusterPort, peerPort); }
             catch (RuntimeException exception) {
                 if (!portInUse(exception) || System.nanoTime() > deadline) throw exception;
                 Thread.sleep(200);
@@ -171,11 +172,12 @@ class DistributedHttpTest {
             if (cause instanceof PortInUseException || cause instanceof BindException) return true;
         return false;
     }
-    private static ConfigurableApplicationContext node(int port, int clusterPort, int peerClusterPort) {
-        return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
+    private static ConfigurableApplicationContext node(String transport, int port, int clusterPort, int peerClusterPort, int peerPort) {
+        boolean http2 = transport.equals("http2");
+        return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port, "--dzdcache.cluster-transport=" + transport,
             "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-" + port,
-            "--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.self-url=http://localhost:" + clusterPort,
-            "--dzdcache.discovery.static-peers[0]=http://localhost:" + peerClusterPort,
+            "--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? port : clusterPort),
+            "--dzdcache.discovery.static-peers[0]=http://localhost:" + (http2 ? peerPort : peerClusterPort),
             "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster", "--dzdcache.sync-interval=300ms",
             "--dzdcache.replication-timeout=2s", "--logging.level.root=ERROR", "--spring.main.banner-mode=off");
     }
