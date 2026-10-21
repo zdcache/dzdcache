@@ -1,5 +1,8 @@
 package io.github.dzdcache.server.schema;
 
+import io.github.dzdcache.json.SchemaDefinition;
+import io.github.dzdcache.json.DimensionDefinition;
+
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;

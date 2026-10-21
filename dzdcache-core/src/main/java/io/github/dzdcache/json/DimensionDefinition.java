@@ -1,4 +1,4 @@
-package io.github.dzdcache.server.schema;
+package io.github.dzdcache.json;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;

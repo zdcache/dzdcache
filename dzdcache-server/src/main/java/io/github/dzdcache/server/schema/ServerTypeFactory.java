@@ -3,6 +3,8 @@ package io.github.dzdcache.server.schema;
 import io.github.dzdcache.cache.RootType;
 import io.github.dzdcache.cache.RootTypeFactory;
 import io.github.dzdcache.cache.TypeDescriptor;
+import io.github.dzdcache.json.JsonType;
+import io.github.dzdcache.json.SchemaDefinition;
 import tools.jackson.databind.ObjectMapper;
 
 public final class ServerTypeFactory implements RootTypeFactory {
@@ -22,7 +24,7 @@ public final class ServerTypeFactory implements RootTypeFactory {
     }
 
     public TypeDescriptor describe(SchemaDefinition definition) {
-        return definition.schema() == null ? JsonType.describe(definition, compiler, mapper) : SchemaType.describe(definition, compiler, mapper);
+        return definition.schema() == null ? JsonType.describe(definition, mapper) : SchemaType.describe(definition, compiler, mapper);
     }
 
     public static boolean describes(TypeDescriptor descriptor) {

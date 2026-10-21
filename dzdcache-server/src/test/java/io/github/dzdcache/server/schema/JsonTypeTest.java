@@ -1,5 +1,10 @@
 package io.github.dzdcache.server.schema;
 
+import io.github.dzdcache.json.SchemaDefinition;
+import io.github.dzdcache.json.DimensionDefinition;
+import io.github.dzdcache.json.JsonRoot;
+import io.github.dzdcache.json.JsonType;
+
 import io.github.dzdcache.cache.RootType;
 import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.zdcache.ZDCache;
@@ -261,7 +266,7 @@ class JsonTypeTest {
         invalid.add(new SchemaDefinition("students", 1, null, "/id", many, 1, "infinite"));
         for (SchemaDefinition definition : invalid) {
             assertThatThrownBy(() -> new JsonType(definition, mapper)).as(definition.toString()).isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> JsonType.describe(definition, compiler, mapper)).as(definition.toString()).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> JsonType.describe(definition, mapper)).as(definition.toString()).isInstanceOf(IllegalArgumentException.class);
         }
         assertThatThrownBy(() -> new JsonType(definition("/id", new DimensionDefinition("name", "/name", "exact")), mapper))
             .hasMessageContaining("needs a type");

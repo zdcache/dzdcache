@@ -1,5 +1,8 @@
 package io.github.dzdcache.server.schema;
 
+import io.github.dzdcache.json.SchemaDefinition;
+import io.github.dzdcache.json.DimensionDefinition;
+
 import io.github.dzdcache.cache.RootType;
 import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.zdcache.IdentityDimension;

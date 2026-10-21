@@ -1,4 +1,4 @@
-package io.github.dzdcache.server.schema;
+package io.github.dzdcache.json;
 
 import io.github.dzdcache.cache.RootType;
 import io.github.dzdcache.cache.TypeDescriptor;
@@ -71,17 +71,17 @@ public final class JsonType implements RootType<JsonRoot> {
     private final SearchSpecification<JsonRoot, Object> specification;
     private volatile Selection selection;
 
-    public static TypeDescriptor describe(SchemaDefinition definition, RuntimeSchemaCompiler compiler, ObjectMapper mapper) {
+    public static TypeDescriptor describe(SchemaDefinition definition, ObjectMapper mapper) {
         validate(definition);
         return new TypeDescriptor(TypeDescriptor.JSON, definition.id(), definition.version(), definition.capacity(),
-            definition.ttl(), compiler.fingerprint(definition), mapper.valueToTree(definition));
+            definition.ttl(), Definitions.fingerprint(definition, mapper), mapper.valueToTree(definition));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     public JsonType(SchemaDefinition definition, ObjectMapper mapper) {
         validate(definition);
         this.definition = definition; this.mapper = mapper;
-        this.identity = RuntimeSchemaCompiler.segments(definition.identity());
+        this.identity = Definitions.segments(definition.identity());
         var builder = SearchSpecification.builder(IdentityDimension.of(JsonRoot.class, "identity", JsonRoot::identity));
         for (DimensionDefinition dimension : definition.dimensions()) {
             String name = "d" + dimensions.size();
@@ -107,7 +107,7 @@ public final class JsonType implements RootType<JsonRoot> {
                 continue;
             }
             dimensions.put(dimension.name(), new Dimension(dimension, name));
-            List<String> segments = RuntimeSchemaCompiler.segments(dimension.path());
+            List<String> segments = Definitions.segments(dimension.path());
             if (segments.contains("*")) {
                 int slot = many(dimension);
                 if (index(dimension).equals("exact")) builder.exactEach(name, root -> (List<Object>) root.value(slot));
@@ -129,7 +129,7 @@ public final class JsonType implements RootType<JsonRoot> {
         for (int i = 0; i < parts.size(); i++) {
             DimensionDefinition part = parts.get(i);
             String name = "p" + i;
-            if (RuntimeSchemaCompiler.segments(part.path()).contains("*")) {
+            if (Definitions.segments(part.path()).contains("*")) {
                 int slot = many(part);
                 builder.exactEach(name, root -> (List<Object>) root.value(slot));
                 continue;
@@ -149,40 +149,40 @@ public final class JsonType implements RootType<JsonRoot> {
     private int one(DimensionDefinition dimension) {
         String type = type(dimension);
         return slot("one " + type + " " + dimension.path(),
-            () -> new One(RuntimeSchemaCompiler.segments(dimension.path()), type, dimension.path()));
+            () -> new One(Definitions.segments(dimension.path()), type, dimension.path()));
     }
     private int many(DimensionDefinition dimension) {
         String type = type(dimension);
         return slot("many " + type + " " + dimension.path(),
-            () -> new Many(RuntimeSchemaCompiler.segments(dimension.path()), type, dimension.path()));
+            () -> new Many(Definitions.segments(dimension.path()), type, dimension.path()));
     }
     private int elements(List<DimensionDefinition> parts, int element) {
         StringBuilder key = new StringBuilder("elements");
         for (DimensionDefinition part : parts) key.append(' ').append(type(part)).append(' ').append(part.path());
         return slot(key.toString(), () -> {
-            List<String> array = RuntimeSchemaCompiler.segments(parts.getFirst().path()).subList(0, element - 1);
+            List<String> array = Definitions.segments(parts.getFirst().path()).subList(0, element - 1);
             List<One> within = new ArrayList<>();
             for (DimensionDefinition part : parts) {
-                List<String> segments = RuntimeSchemaCompiler.segments(part.path());
+                List<String> segments = Definitions.segments(part.path());
                 within.add(new One(List.copyOf(segments.subList(element, segments.size())), type(part), part.path()));
             }
             return new Elements(List.copyOf(array), parts.getFirst().path(), List.copyOf(within));
         });
     }
 
-    static void validate(SchemaDefinition definition) {
-        RuntimeSchemaCompiler.validateDefinition(definition);
+    public static void validate(SchemaDefinition definition) {
+        Definitions.validateDefinition(definition);
         if (definition.schema() != null) throw invalid("A JSON type is registered without a schema");
-        if (RuntimeSchemaCompiler.segments(definition.identity()).contains("*"))
+        if (Definitions.segments(definition.identity()).contains("*"))
             throw invalid("Identity must select one value without array traversal");
         Set<String> names = new HashSet<>();
         for (DimensionDefinition dimension : definition.dimensions()) {
-            RuntimeSchemaCompiler.validateName(names, dimension);
+            Definitions.validateName(names, dimension);
             if (dimension.index().equalsIgnoreCase("compound")) validateCompound(dimension);
             else {
                 if (!dimension.parts().isEmpty()) throw invalid("Only a compound dimension declares parts");
                 if (dimension.path() == null) throw invalid("A dimension path is required");
-                validatePart(dimension, RuntimeSchemaCompiler.segments(dimension.path()).contains("*"));
+                validatePart(dimension, Definitions.segments(dimension.path()).contains("*"));
             }
         }
     }
@@ -198,7 +198,7 @@ public final class JsonType implements RootType<JsonRoot> {
                 throw invalid("Compound parts must be exact, prefix or range");
             if (i < parts.size() - 1 && !part.index().equalsIgnoreCase("exact"))
                 throw invalid("Only the last compound part can be prefix or range");
-            boolean traverses = !shared && RuntimeSchemaCompiler.segments(part.path()).contains("*");
+            boolean traverses = !shared && Definitions.segments(part.path()).contains("*");
             if (traverses && !part.index().equalsIgnoreCase("exact"))
                 throw invalid("A compound part that traverses arrays outside a shared element must be exact");
             validatePart(part, traverses);
@@ -220,7 +220,7 @@ public final class JsonType implements RootType<JsonRoot> {
         List<String> shared = null;
         for (DimensionDefinition part : parts) {
             if (part == null || part.path() == null) throw invalid("Compound parts need a path");
-            List<String> segments = RuntimeSchemaCompiler.segments(part.path());
+            List<String> segments = Definitions.segments(part.path());
             int star = segments.indexOf("*");
             if (star < 0 || segments.lastIndexOf("*") != star) return -1;
             List<String> element = segments.subList(0, star + 1);
@@ -321,10 +321,10 @@ public final class JsonType implements RootType<JsonRoot> {
     private Projection projection(List<String> fields) {
         Selection last = selection;
         if (last != null && last.fields() == fields) return last.projection();
-        if (fields.size() > CompiledSchema.MAX_FIELDS) throw invalid("At most " + CompiledSchema.MAX_FIELDS + " fields can be selected");
+        if (fields.size() > Definitions.MAX_FIELDS) throw invalid("At most " + Definitions.MAX_FIELDS + " fields can be selected");
         Projection top = new Projection();
         for (String field : fields) {
-            List<String> segments = RuntimeSchemaCompiler.segments(field);
+            List<String> segments = Definitions.segments(field);
             if (segments.contains("*")) throw invalid("A selected field cannot traverse arrays: " + field);
             Projection current = top;
             for (String segment : segments) current = current.children.computeIfAbsent(segment, name -> new Projection());
@@ -357,7 +357,7 @@ public final class JsonType implements RootType<JsonRoot> {
     @Override public JsonNode writeIdentity(Object identity) { return mapper.valueToTree(identity); }
     @Override public JsonRoot read(JsonNode value) {
         if (value == null || !value.isObject()) throw invalid("A JSON root object is required");
-        CompiledSchema.Budget.check(value);
+        Definitions.checkSize(value);
         Object id = identityValue(at(value, identity, definition.identity()));
         Object[] values = slots.isEmpty() ? NO_VALUES : new Object[slots.size()];
         for (int i = 0; i < values.length; i++) values[i] = slots.get(i).extract(value);
@@ -382,7 +382,7 @@ public final class JsonType implements RootType<JsonRoot> {
     @Override public io.github.dzdcache.cache.Filter.Paths paths() {
         return new io.github.dzdcache.cache.Filter.Paths() {
             @Override public java.util.function.Function<Object, List<Object>> values(String path, String type) {
-                List<String> segments = RuntimeSchemaCompiler.segments(path);
+                List<String> segments = Definitions.segments(path);
                 String checked = type == null ? null : type.toLowerCase(Locale.ROOT);
                 if (checked != null && !TYPES.contains(checked)) throw invalid("Unsupported filter type: " + type);
                 return root -> {
@@ -429,5 +429,5 @@ public final class JsonType implements RootType<JsonRoot> {
         } else if (node.isObject()) gather(node.get(segment), segments, offset + 1, type, path, values);
     }
 
-    private static IllegalArgumentException invalid(String message) { return RuntimeSchemaCompiler.invalid(message); }
+    private static IllegalArgumentException invalid(String message) { return Definitions.invalid(message); }
 }

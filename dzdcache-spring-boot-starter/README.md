@@ -56,6 +56,8 @@ students.invalidate(1L);
 
 Values are converted with the service's `ObjectMapper` when there is exactly one; cluster messages use a private mapper.
 
+An instance with `dzdcache.role: learner` can also follow a cluster of dzdcache servers as a near cache. It reads the server's JSON-only types (those registered without a `schema`) through `distributedCache.json("students", 1)`, which has `get`, `search` and `count`, with the server's filter conditions as a `JsonNode`. Types registered with a JSON Schema need the server's runtime compiler and are listed as unavailable there.
+
 ## Configuration
 
 | Setting | Default |

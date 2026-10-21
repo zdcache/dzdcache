@@ -3,7 +3,7 @@ package io.github.dzdcache.server.bench;
 import io.github.dzdcache.cache.CacheEngine;
 import io.github.dzdcache.cache.EntryMutation;
 import io.github.dzdcache.server.schema.RuntimeSchemaCompiler;
-import io.github.dzdcache.server.schema.SchemaDefinition;
+import io.github.dzdcache.json.SchemaDefinition;
 import io.github.dzdcache.server.schema.ServerTypeFactory;
 import java.lang.management.ManagementFactory;
 import java.lang.ref.Reference;

@@ -53,7 +53,7 @@ public class DzdCacheAutoConfiguration {
                                  ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values) {
         properties.validate();
         List<Typed> typed = typed(declarations, values.getIfUnique(mapper::mapper));
-        RootTypeFactory factory = factories.getIfUnique();
+        RootTypeFactory factory = factories.getIfUnique(() -> new io.github.dzdcache.json.JsonTypeFactory(mapper.mapper()));
         return new EngineHolder(() -> {
             CacheEngine engine = new CacheEngine(factory, mapper.mapper(), properties.getMaxSchemas(), properties.getMaxRevisionsPerSchema(),
                 properties.getMaxSearchResults(), properties.getRevisionRetention(), java.time.Clock.systemUTC());
@@ -180,7 +180,7 @@ public class DzdCacheAutoConfiguration {
         ObjectMapper valueMapper = values.getIfUnique(mapper::mapper);
         List<ClusterCache<?, ?>> caches = new ArrayList<>();
         for (CacheType<?, ?> declaration : declarations.orderedStream().toList()) caches.add(cache(declaration, engines, cluster, valueMapper));
-        return new DistributedCache(cluster, caches);
+        return new DistributedCache(cluster, engines, mapper.mapper(), caches);
     }
 
     private static <T, ID> ClusterCache<T, ID> cache(CacheType<T, ID> declaration, EngineHolder engines, ClusterCoordinator cluster, ObjectMapper values) {

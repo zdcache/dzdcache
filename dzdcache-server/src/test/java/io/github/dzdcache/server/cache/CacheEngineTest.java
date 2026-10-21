@@ -1,11 +1,11 @@
 package io.github.dzdcache.server.cache;
 
 import io.github.dzdcache.cache.*;
-import io.github.dzdcache.server.schema.DimensionDefinition;
+import io.github.dzdcache.json.DimensionDefinition;
 import io.github.dzdcache.server.schema.RuntimeSchemaCompiler;
-import io.github.dzdcache.server.schema.JsonRoot;
+import io.github.dzdcache.json.JsonRoot;
 import io.github.dzdcache.server.schema.ServerTypeFactory;
-import io.github.dzdcache.server.schema.SchemaDefinition;
+import io.github.dzdcache.json.SchemaDefinition;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;

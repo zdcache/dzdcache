@@ -1,4 +1,4 @@
-package io.github.dzdcache.server.schema;
+package io.github.dzdcache.json;
 
 public final class JsonRoot {
     private final Object identity;

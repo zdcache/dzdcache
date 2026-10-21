@@ -2,7 +2,7 @@ package io.github.dzdcache.server.api;
 
 import io.github.dzdcache.cache.*;
 import io.github.dzdcache.cluster.ClusterCoordinator;
-import io.github.dzdcache.server.schema.SchemaDefinition;
+import io.github.dzdcache.json.SchemaDefinition;
 import io.github.dzdcache.server.schema.ServerTypeFactory;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
