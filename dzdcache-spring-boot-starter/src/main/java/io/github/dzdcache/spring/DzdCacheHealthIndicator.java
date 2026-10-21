@@ -21,7 +21,8 @@ public class DzdCacheHealthIndicator implements HealthIndicator {
         boolean current = cluster.current();
         return (current || cluster.bootstrapping() || cluster.servesStale() ? Health.up() : Health.outOfService())
             .withDetail("staleMillis", current ? 0 : cluster.staleMillis())
-            .withDetail("role", cluster.role()).withDetail("term", cluster.term())
+            .withDetail("role", cluster.role()).withDetail("learner", cluster.learner()).withDetail("learners", cluster.learners().size())
+            .withDetail("term", cluster.term())
             .withDetail("master", cluster.master() == null ? "none" : cluster.master().id())
             .withDetail("members", cluster.members().size()).withDetail("appliedIndex", cluster.appliedIndex()).withDetail("current", cluster.current()).withDetail("bootstrapping", cluster.bootstrapping()).withDetail("clusterSize", cluster.clusterSize()).withDetail("resizing", cluster.view().previousSize() != null)
             .withDetail("unavailableTypes", engines.engine().unavailableTypes())

@@ -25,6 +25,8 @@ Leases use each node's monotonic clock; they need clock rates to agree within a 
 
 **Stale reads by choice.** With `dzdcache.max-staleness` above 0, a node that cannot confirm it is current answers from its own copy instead of 503, as long as it was last current at most that long ago, and labels the answer as stale with its age. Such an answer can miss acknowledged writes. A fresh answer keeps every guarantee above; a node that has never been current, or is joining, still answers 503.
 
+**Learners.** A learner applies the same log as the members but has no vote and does not count towards any quorum, so a write is committed without it. With `dzdcache.learner-fresh-reads` (the default) it holds a read lease from the master under the same rules as a follower, and the master does not acknowledge a write until every lease holder, learners included, has applied it; its fresh answers therefore keep every guarantee above. Without it, a learner never answers fresh: it answers stale within `max-staleness`, measured from the last time it had applied everything the master had committed.
+
 **Change stream.** Every node reports what it applies, in log order, with each change at the position of its log entry: puts with their value, invalidations, evictions by request and by the LRU, and expiries. Members apply the same log, so they report the same changes at the same positions, and a subscriber can continue on another node from its last position. A node that has replaced its data, from a snapshot or after rejoining, reports `RESET` instead, and so does a position older than the node keeps.
 
 ## Owner revisions

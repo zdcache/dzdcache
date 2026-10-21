@@ -44,13 +44,13 @@ public sealed interface Message {
     record Voted(long term, boolean granted, boolean candidateIsMember, String clusterId) implements Message { }
     record SnapshotOffer(long term, Member master, String snapshotId, long index, long indexTerm, List<Member> members,
                          List<TypeDescriptor> schemas, String clusterId, int clusterSize, List<Member> previousMembers,
-                         int previousSize) implements Message { }
+                         int previousSize, List<Member> learners) implements Message { }
     record SnapshotPageRequest(String snapshotId, int from) implements Message { }
     record SnapshotPage(boolean missing, List<SnapshotRecord> records, Integer next) implements Message { }
     record WhoLeads() implements Message { }
     record Leader(Member self, boolean member, Member master, List<Member> members, long lastIndex, long lastTerm,
-                  String clusterId, int clusterSize, boolean cannotStart) implements Message { }
-    record Join(Member member, int clusterSize) implements Message { }
+                  String clusterId, int clusterSize, boolean cannotStart, boolean learner) implements Message { }
+    record Join(Member member, int clusterSize, boolean learner) implements Message { }
     record Leave(Member member) implements Message { }
     record ForwardPublish(TypeDescriptor schema) implements Message { }
     record ForwardPuts(List<PutRequest> puts) implements Message { }

@@ -132,6 +132,29 @@ class DzdCacheStarterTest {
         await(() -> started.stream().allMatch(node -> students(node).get(3L) == null));
     }
 
+    @Test void aLearnerHoldsACopyAnswersFreshReadsAndForwardsWritesWithoutJoiningTheQuorum() throws Exception {
+        var started = start(Students.class, Students.class, Students.class);
+        int port;
+        try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
+        List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=learner",
+            "--dzdcache.role=learner", "--dzdcache.cluster-port=" + port, "--dzdcache.discovery.self-url=http://localhost:" + port,
+            "--dzdcache.cluster-token=secret", "--logging.level.root=WARN", "--spring.main.banner-mode=off"));
+        for (int i = 0; i < started.size(); i++)
+            args.add("--dzdcache.discovery.static-peers[" + i + "]=http://localhost:" + started.get(i).getEnvironment().getProperty("dzdcache.cluster-port"));
+        ConfigurableApplicationContext learner = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new));
+        nodes.add(learner);
+        await(() -> learner.getBean(DistributedCache.class).current());
+        assertThat(cluster(learner).learner()).isTrue();
+        assertThat(cluster(started.getFirst()).view().learners()).extracting(Member::id).containsExactly("learner");
+        assertThat(cluster(started.getFirst()).view().members()).hasSize(3);
+        assertThat(students(started.getFirst()).put(new Student(1, "Anna", "Oslo", 22))).isEqualTo(1);
+        assertThat(students(learner).get(1L)).isEqualTo(new Student(1, "Anna", "Oslo", 22));
+        assertThat(students(learner).put(new Student(2, "Ola", "Bergen", 30))).isEqualTo(1);
+        assertThat(students(started.get(1)).get(2L)).isEqualTo(new Student(2, "Ola", "Bergen", 30));
+        await(() -> fingerprint(learner).equals(fingerprint(started.getFirst())));
+        assertThat(learner.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("learner", true);
+    }
+
     private static final List<String> TLS = List.of("--dzdcache.cluster-tls.enabled=true", "--dzdcache.cluster-tls.bundle=cluster",
         "--dzdcache.cluster-tls.client-auth=need",
         "--spring.ssl.bundle.pem.cluster.keystore.certificate=classpath:tls/node.pem",
@@ -208,6 +231,16 @@ class DzdCacheStarterTest {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=quic", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
             .hasStackTraceContaining("cluster-transport must be tcp, http2 or websocket");
+    }
+
+    @Test void learnerSettingsAreValidated() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.role=observer", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("role must be member or learner");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.role=learner", "--dzdcache.learner-fresh-reads=false",
+                "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("set max-staleness above 0");
     }
 
     @Test void anUnknownClusterEncodingIsRefused() {

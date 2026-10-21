@@ -147,7 +147,7 @@ class DiskStorageTest {
         for (long id = 1; id <= 3; id++) engine.apply(new EntryMutation(PUT, "students", 1, mapper.valueToTree(id),
             mapper.valueToTree(new JacksonRootTypeTest.Student(id, "S" + id, "Oslo", 20)), 1, null), 1_000);
         Member self = new Member("a", URI.create("http://a:7070"), 1);
-        Storage.SnapshotHeader header = new Storage.SnapshotHeader(7, 2, List.of(self), 1, null, 0, "cluster-1", List.of(descriptor));
+        Storage.SnapshotHeader header = new Storage.SnapshotHeader(7, 2, List.of(self), 1, null, 0, "cluster-1", List.of(descriptor), List.of());
         try (DiskStorage storage = open(1 << 20)) {
             CompletableFuture<String> written = new CompletableFuture<>();
             storage.writeSnapshot(0, header, engine.capture(), written::complete, written::completeExceptionally);

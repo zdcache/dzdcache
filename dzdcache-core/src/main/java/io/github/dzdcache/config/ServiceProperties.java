@@ -26,6 +26,9 @@ public class ServiceProperties {
     private int clusterSize;
     private String clusterTransport = "tcp";
     private String clusterEncoding = "json";
+    private String role = "member";
+    private int maxLearners = 16;
+    private boolean learnerFreshReads = true;
     private String apiToken = "";
     private String clusterToken = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
@@ -64,7 +67,16 @@ public class ServiceProperties {
             throw new IllegalArgumentException("cluster-encoding must be json or smile");
         if (!java.util.Set.of("http2", "tcp", "websocket").contains(clusterTransport))
             throw new IllegalArgumentException("cluster-transport must be tcp, http2 or websocket");
+        if (!java.util.Set.of("member", "learner").contains(role)) throw new IllegalArgumentException("role must be member or learner");
+        if (maxLearners < 0) throw new IllegalArgumentException("max-learners cannot be negative");
+        if (learner() && witnessUrl != null) throw new IllegalArgumentException("witness-url is only for members; a learner never stands for election");
+        if (learner() && !learnerFreshReads && maxStaleness.isZero())
+            throw new IllegalArgumentException("A learner without learner-fresh-reads only answers stale; set max-staleness above 0");
     }
+    public boolean learner() { return "learner".equals(role); }
+    public String getRole() { return role; } public void setRole(String v) { role = v; }
+    public int getMaxLearners() { return maxLearners; } public void setMaxLearners(int v) { maxLearners = v; }
+    public boolean isLearnerFreshReads() { return learnerFreshReads; } public void setLearnerFreshReads(boolean v) { learnerFreshReads = v; }
     public String getClusterEncoding() { return clusterEncoding; } public void setClusterEncoding(String v) { clusterEncoding = v; }
     public String getClusterTransport() { return clusterTransport; } public void setClusterTransport(String v) { clusterTransport = v; }
     public Duration getMaxStaleness() { return maxStaleness; } public void setMaxStaleness(Duration v) { maxStaleness = v; }

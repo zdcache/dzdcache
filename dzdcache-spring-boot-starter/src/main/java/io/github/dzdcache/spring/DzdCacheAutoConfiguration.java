@@ -124,7 +124,7 @@ public class DzdCacheAutoConfiguration {
     ClusterCoordinator dzdcacheCluster(EngineHolder engines, PeerDirectory directory, RaftTransport transport, DiscoveryProperties discovery,
                                        ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper,
                                        ObjectProvider<Storage> storage) {
-        properties.setClusterSize(clusterSize(discovery, properties.getClusterSize()));
+        properties.setClusterSize(properties.learner() ? Math.max(1, properties.getClusterSize()) : clusterSize(discovery, properties.getClusterSize()));
         if (properties.getWitnessUrl() != null) {
             if (properties.getClusterSize() != 2) throw new IllegalArgumentException("dzdcache.witness-url is only for a cluster of two nodes");
             discovery.requireScheme(properties.getWitnessUrl(), "dzdcache.witness-url");

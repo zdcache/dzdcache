@@ -1101,4 +1101,225 @@ class ClusterSimulationTest {
             }
         }
     }
+
+    private static boolean learns(SimulatedCluster.Node via, String id) {
+        return via.coordinator.view().learners().stream().anyMatch(learner -> learner.id().equals(id));
+    }
+
+    @Test void aLearnerJoinsWithoutASlotFollowsEveryMasterAndNeverVotes() {
+        SimulatedCluster cluster = new SimulatedCluster(41);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 20; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N" + id, 1))), 5_000);
+        SimulatedCluster.Node learner = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(learner.coordinator::current, 20_000)).as("the learner holds a lease").isTrue();
+        assertThat(a.coordinator.view().size()).isEqualTo(3);
+        assertThat(a.coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c");
+        assertThat(learns(a, "l")).isTrue();
+        assertThat(learner.coordinator.learners()).extracting(Member::id).containsExactly("l");
+        CompletableFuture<List<ClusterCoordinator.Outcome>> viaLearner = learner.coordinator.putAsync(List.of(put(cluster, 21, "Via", 1)));
+        viaLearner.thenAccept(outcomes -> cluster.acknowledge(learner, 21, 1));
+        assertThat(status(cluster.await(viaLearner, 5_000))).isEqualTo(200);
+        assertIdentical(cluster);
+        SimulatedCluster.Node first = master(cluster);
+        cluster.crash(first.id);
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1 && learner.coordinator.current(), 20_000)).isTrue();
+        assertThat(cluster.mastersNow().getFirst().id).isNotEqualTo("l");
+        SimulatedCluster.Node second = cluster.mastersNow().getFirst();
+        CompletableFuture<List<ClusterCoordinator.Outcome>> after = second.coordinator.putAsync(List.of(put(cluster, 22, "After", 1)));
+        after.thenAccept(outcomes -> cluster.acknowledge(second, 22, 1));
+        assertThat(status(cluster.await(after, 5_000))).isEqualTo(200);
+        assertThat(cluster.read(learner, 22)).isEqualTo(1L);
+        assertThat(learner.meters.counter("dzdcache.elections").count()).isZero();
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(cluster.violations).isEmpty();
+        assertIdentical(cluster);
+    }
+
+    @Test void aMemberStoppingLeavesAQuorumOfTwoOfThreeEvenWithLearners() {
+        SimulatedCluster cluster = new SimulatedCluster(42);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node l1 = cluster.startLearner("l1", true);
+        SimulatedCluster.Node l2 = cluster.startLearner("l2", true);
+        assertThat(cluster.runUntil(() -> l1.coordinator.ready() && l2.coordinator.ready(), 20_000)).isTrue();
+        cluster.crash("b");
+        cluster.crash("c");
+        CompletableFuture<List<ClusterCoordinator.Outcome>> lost = a.coordinator.putAsync(List.of(put(cluster, 1, "Lost", 1)));
+        cluster.run(5_000);
+        assertThat(lost.isDone() && !lost.isCompletedExceptionally() && status(lost.join()) == 200)
+            .as("two learners do not make up for two missing members").isFalse();
+        cluster.start("b");
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().size() == 1, 20_000)).isTrue();
+        assertThat(cluster.mastersNow().getFirst().id).isIn("a", "b");
+    }
+
+    @Test void aLearnerInstallsASnapshotWhenTheLogNoLongerReachesBack() {
+        SimulatedCluster cluster = new SimulatedCluster(43);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.properties.setLogRetentionBytes(2_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 50; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N" + id, 1))), 5_000);
+        cluster.run(500);
+        SimulatedCluster.Node learner = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(learner.coordinator::ready, 20_000)).isTrue();
+        assertThat(learner.meters.counter("dzdcache.snapshots.installed").count()).isEqualTo(1);
+        assertThat(revisions(learner)).hasSize(50);
+        assertThat(learner.coordinator.learners()).extracting(Member::id).containsExactly("l");
+        assertIdentical(cluster);
+    }
+
+    @Test void aLearnerEvictsTheSameRootsAndEmitsTheSameChangesAsTheMembers() {
+        SimulatedCluster cluster = new SimulatedCluster(44);
+        TypeDescriptor students = cluster.students(2);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node learner = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(learner.coordinator::current, 20_000)).isTrue();
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "Ann", 1))), 5_000);
+        cluster.run(5);
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 2, "Bob", 1))), 5_000);
+        cluster.runUntil(() -> revisions(learner).size() == 2, 5_000);
+        cluster.run(5);
+        assertThat(learner.engine().get("students", 1, cluster.mapper.valueToTree(1))).isNotNull();
+        cluster.run(1_500);
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 3, "Cid", 1))), 5_000);
+        assertIdentical(cluster);
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(held(node)).as(node.id).containsExactly(1L, 3L);
+        assertThat(stream(learner)).isEqualTo(stream(a));
+    }
+
+    @Test void aLearnerWithoutFreshReadsAnswersStaleWithinTheBoundAndWritesDoNotWaitForIt() {
+        SimulatedCluster cluster = new SimulatedCluster(45);
+        cluster.properties.setMaxStaleness(java.time.Duration.ofSeconds(2));
+        cluster.properties.setReadWait(java.time.Duration.ZERO);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node learner = cluster.startLearner("l", false);
+        assertThat(cluster.runUntil(learner.coordinator::ready, 20_000)).isTrue();
+        cluster.run(500);
+        assertThat(learner.coordinator.current()).isFalse();
+        ClusterCoordinator.Read read = learner.coordinator.awaitCurrent();
+        assertThat(read.fresh()).isFalse();
+        assertThat(read.staleMillis()).isLessThan(500);
+        cluster.isolate("l");
+        long started = cluster.now();
+        assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000))).isEqualTo(200);
+        assertThat(cluster.now() - started).as("a write does not wait for an unreachable learner").isLessThan(200);
+        cluster.run(3_000);
+        assertThatThrownBy(learner.coordinator::awaitCurrent).isInstanceOfSatisfying(io.github.dzdcache.cache.CacheException.class,
+            refused -> assertThat(refused.status()).isEqualTo(503));
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> revisions(learner).containsKey(1L), 5_000)).isTrue();
+        assertThat(learner.coordinator.awaitCurrent().staleMillis()).isLessThan(500);
+    }
+
+    @Test void aSilentLearnerIsRemovedAndRejoinsWhenItIsBack() {
+        SimulatedCluster cluster = new SimulatedCluster(46);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node learner = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(learner.coordinator::ready, 20_000)).isTrue();
+        cluster.isolate("l");
+        assertThat(cluster.runUntil(() -> !learns(master(cluster), "l"), 20_000)).as("the master removes a silent learner").isTrue();
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000);
+        cluster.heal();
+        assertThat(cluster.runUntil(() -> learner.coordinator.current() && learns(master(cluster), "l"), 30_000)).isTrue();
+        assertThat(revisions(learner)).containsKey(1L);
+        assertIdentical(cluster);
+    }
+
+    @Test void aGracefulLeaveRemovesALearnerAtOnceAndTheMasterLimitsHowManyJoin() {
+        SimulatedCluster cluster = new SimulatedCluster(47);
+        cluster.properties.setMaxLearners(1);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        SimulatedCluster.Node first = cluster.startLearner("l1", true);
+        assertThat(cluster.runUntil(first.coordinator::ready, 20_000)).isTrue();
+        SimulatedCluster.Node second = cluster.startLearner("l2", true);
+        assertThat(cluster.runUntil(() -> second.coordinator.startupProblem() != null, 20_000)).isTrue();
+        assertThat(second.coordinator.startupProblem()).contains("dzdcache.max-learners");
+        assertThat(cluster.await(master(cluster).coordinator.handle(new Message.Leave(first.coordinator.self())), 5_000)).isInstanceOf(Message.Ack.class);
+        assertThat(learns(master(cluster), "l1")).isFalse();
+        assertThat(cluster.runUntil(() -> learns(a, "l1") == false, 5_000)).isTrue();
+        assertThat(a.coordinator.view().members()).hasSize(3);
+    }
+
+    @Test void aLearnerCannotTakeTheIdOfAMember() {
+        SimulatedCluster cluster = new SimulatedCluster(48);
+        started(cluster, "a", "b", "c");
+        cluster.nodeIds.put("l", "b");
+        SimulatedCluster.Node impostor = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(() -> impostor.coordinator.startupProblem() != null, 20_000)).isTrue();
+        assertThat(impostor.coordinator.ready()).isFalse();
+    }
+
+    @Test void aResizeKeepsTheLearners() {
+        SimulatedCluster cluster = new SimulatedCluster(49);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.configure("a", "b", "c", "d", "e");
+        cluster.properties.setClusterSize(3);
+        for (String id : List.of("a", "b", "c")) { cluster.start(id); cluster.run(10); }
+        assertThat(cluster.runUntil(() -> cluster.live().stream().allMatch(node -> node.coordinator.ready()), 30_000)).isTrue();
+        SimulatedCluster.Node a = cluster.nodes.get("a");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node learner = cluster.startLearner("l", true);
+        assertThat(cluster.runUntil(learner.coordinator::ready, 20_000)).isTrue();
+        resize(cluster, "a", 5);
+        cluster.start("d");
+        cluster.start("e");
+        assertThat(cluster.runUntil(() -> settled(cluster, 5), 30_000)).isTrue();
+        assertThat(learns(master(cluster), "l")).isTrue();
+        cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000);
+        assertThat(cluster.runUntil(() -> learner.coordinator.current() && revisions(learner).containsKey(1L), 10_000)).isTrue();
+        assertIdentical(cluster);
+    }
+
+    @Test void randomFailuresWithLearnersNeverGiveAStaleReadOrALearnerAsMaster() {
+        for (long seed = 700; seed < 706; seed++) {
+            SimulatedCluster cluster = new SimulatedCluster(seed);
+            TypeDescriptor students = cluster.students(100_000);
+            String[] ids = {"n0", "n1", "n2"};
+            started(cluster, ids);
+            cluster.await(cluster.nodes.get("n0").coordinator.publishAsync(students), 5_000);
+            SimulatedCluster.Node learner = cluster.startLearner("l", true);
+            assertThat(cluster.runUntil(learner.coordinator::ready, 20_000)).isTrue();
+            Random random = new Random(seed);
+            long[] revision = new long[20];
+            String faulty = null;
+            for (int step = 0; step < 250; step++) {
+                List<SimulatedCluster.Node> live = cluster.live();
+                int action = random.nextInt(100);
+                String[] targets = {"n0", "n1", "n2", "l"};
+                String target = targets[random.nextInt(targets.length)];
+                if (action < 8 && faulty == null) {
+                    faulty = target;
+                    if (random.nextBoolean()) cluster.crash(target); else cluster.isolate(target);
+                } else if (action < 14 && faulty != null) {
+                    cluster.heal();
+                    if (!cluster.nodes.get(faulty).alive) cluster.start(faulty);
+                    faulty = null;
+                } else {
+                    long id = random.nextInt(20);
+                    tracked(cluster, live.get(random.nextInt(live.size())).id, id, ++revision[(int) id]);
+                }
+                for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(20));
+                cluster.run(random.nextInt(400));
+            }
+            cluster.heal();
+            if (faulty != null && !cluster.nodes.get(faulty).alive) cluster.start(faulty);
+            cluster.run(40_000);
+            String label = "seed " + seed;
+            assertThat(cluster.violations).as(label).isEmpty();
+            assertThat(cluster.staleReads).as(label).isEmpty();
+            assertThat(cluster.mastersNow()).as(label).hasSize(1);
+            assertThat(cluster.masters.values()).as(label).doesNotContain("l");
+            assertThat(cluster.runUntil(() -> cluster.nodes.get("l").coordinator.current(), 30_000)).as(label).isTrue();
+            assertIdentical(cluster);
+        }
+    }
 }

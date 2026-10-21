@@ -41,6 +41,7 @@ final class SimulatedCluster {
     boolean persistent = persistentByDefault;
     long snapshotBytes = 4_000;
     final Map<String, SimulatedDisk> disks = new HashMap<>();
+    final Map<String, ServiceProperties> learners = new HashMap<>();
     private long now = 1_000_000;
     private long sequence;
 
@@ -88,7 +89,7 @@ final class SimulatedCluster {
             };
             Storage storage = persistent ? disk(id) : Storage.none();
             this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
-                new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), properties, meters, timers,
+                new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), learners.getOrDefault(id, properties), meters, timers,
                 new SplittableRandom(random.nextLong()), mapper, storage);
         }
         CacheEngine engine() { return holder.engine(); }
@@ -125,9 +126,23 @@ final class SimulatedCluster {
 
     void at(long delay, Runnable task) { events.add(new Event(now + Math.max(0, delay), sequence++, task)); }
 
+    Node startLearner(String id, boolean freshReads) {
+        ServiceProperties own = new ServiceProperties();
+        for (java.lang.reflect.Field field : ServiceProperties.class.getDeclaredFields()) {
+            if (java.lang.reflect.Modifier.isFinal(field.getModifiers()) || java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+            field.setAccessible(true);
+            try { field.set(own, field.get(properties)); } catch (IllegalAccessException e) { throw new IllegalStateException(e); }
+        }
+        own.setRole("learner");
+        own.setLearnerFreshReads(freshReads);
+        own.validate();
+        learners.put(id, own);
+        return start(id);
+    }
+
     Node start(String id) {
         if (!addresses.contains(id)) addresses.add(id);
-        if (!fixedSize) properties.setClusterSize(addresses.size());
+        if (!fixedSize && !learners.containsKey(id)) properties.setClusterSize((int) addresses.stream().filter(address -> !learners.containsKey(address)).count());
         Node node = new Node(id);
         nodes.put(id, node);
         groups.putIfAbsent(id, 0);

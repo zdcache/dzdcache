@@ -25,7 +25,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public record Read(boolean fresh, long staleMillis) {
         public static final Read FRESH = new Read(true, 0);
     }
-    public record ClusterView(int size, List<Member> members, Member master, Integer previousSize, List<Member> previousMembers) { }
+    public record ClusterView(int size, List<Member> members, Member master, Integer previousSize, List<Member> previousMembers, List<Member> learners) { }
 
     private final RaftGroup control;
 
@@ -57,6 +57,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public Member self() { return control.self(); }
     public Member master() { return control.master(); }
     public List<Member> members() { return control.members(); }
+    public List<Member> learners() { return control.learners(); }
+    public boolean learner() { return control.learner(); }
     public long appliedIndex() { return control.appliedIndex(); }
     public String clusterId() { return control.clusterId(); }
     public String startupProblem() { return control.startupProblem(); }

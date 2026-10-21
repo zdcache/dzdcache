@@ -28,7 +28,9 @@ public interface Storage extends AutoCloseable {
     record Tagged(int group, Record record) { }
 
     record SnapshotHeader(long index, long term, List<Member> members, int size, List<Member> previousMembers, int previousSize,
-                          String clusterId, List<TypeDescriptor> schemas) { }
+                          String clusterId, List<TypeDescriptor> schemas, List<Member> learners) {
+        public SnapshotHeader { learners = learners == null ? List.of() : List.copyOf(learners); }
+    }
 
     interface SnapshotSource {
         SnapshotHeader header();

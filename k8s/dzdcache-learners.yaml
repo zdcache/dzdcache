@@ -1,0 +1,114 @@
+# Read replicas for the cluster in dzdcache.yaml; apply that file first.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dzdcache-learners
+spec:
+  selector:
+    app: dzdcache-learner
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dzdcache-learner
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dzdcache-learner
+  template:
+    metadata:
+      labels:
+        app: dzdcache-learner
+    spec:
+      serviceAccountName: dzdcache
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dzdcache
+          image: dzdcache:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: peer
+              containerPort: 7070
+          env:
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: DZDCACHE_DISCOVERY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DZDCACHE_DISCOVERY_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DZDCACHE_ROLE
+              value: learner
+            - name: DZDCACHE_DISCOVERY_MODE
+              value: kubernetes
+            - name: DZDCACHE_DISCOVERY_SERVICE_NAME
+              value: dzdcache-peers
+            - name: DZDCACHE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dzdcache-auth
+                  key: api-token
+            - name: DZDCACHE_CLUSTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dzdcache-auth
+                  key: cluster-token
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi

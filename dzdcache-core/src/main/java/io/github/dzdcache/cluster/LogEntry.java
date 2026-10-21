@@ -22,8 +22,11 @@ public record LogEntry(long index, long term, long at, Payload payload, int byte
     public record Publish(TypeDescriptor schema) implements Payload { }
     public record Mutations(List<EntryMutation> mutations) implements Payload { }
     public record Accesses(List<Access> accesses) implements Payload { }
-    public record Membership(List<Member> members, int size, List<Member> previousMembers, int previousSize) implements Payload {
-        public Membership(List<Member> members, int size) { this(members, size, null, 0); }
+    public record Membership(List<Member> members, int size, List<Member> previousMembers, int previousSize, List<Member> learners) implements Payload {
+        public Membership {
+            learners = learners == null ? List.of() : List.copyOf(learners);
+        }
+        public Membership(List<Member> members, int size, List<Member> learners) { this(members, size, null, 0, learners); }
     }
     public record Sweep() implements Payload { }
     public record Noop() implements Payload { }

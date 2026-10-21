@@ -392,6 +392,7 @@ components:
         master: {$ref: '#/components/schemas/Member'}
         previousSize: {type: [integer, 'null'], description: Set while a resize is in progress}
         previousMembers: {type: [array, 'null'], items: {$ref: '#/components/schemas/Member'}}
+        learners: {type: array, items: {$ref: '#/components/schemas/Member'}, description: Nodes that hold a full copy and apply the log but do not vote}
     ResizeRequest:
       type: object
       required: [size]
