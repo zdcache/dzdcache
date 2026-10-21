@@ -25,6 +25,7 @@ dzdcache:
   max-revisions-per-schema: 100000
   replication-timeout: 3s
   sync-interval: 10s
+  partitions: ${DZDCACHE_PARTITIONS:1}
   api-token: ${DZDCACHE_API_TOKEN:}
   cluster-token: ${DZDCACHE_CLUSTER_TOKEN:}
   discovery:

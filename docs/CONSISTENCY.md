@@ -23,6 +23,10 @@ A read that starts after a write was acknowledged, on any node, returns that wri
 
 Leases use each node's monotonic clock; they need clock rates to agree within a few percent, not synchronized clocks. Readiness reports whether a node can serve fresh reads, so traffic moves away from a node as it loses its lease; a client that keeps a direct connection gets 503 rather than older data.
 
+## Partitions
+
+With `dzdcache.partitions` above 1, a control log orders schemas and membership, and each partition has its own log and master for the writes and reported gets of its identities; a write's partition follows from its specification and identity. Every node still holds every partition. A data entry records the control log index its master had applied, and no node applies it before its own control log has reached that index, so a schema is in place before writes that need it. The partitions follow the control log's membership. A read waits until every log on its node is current. Eviction is decided per partition, from each type's capacity split evenly between the partitions, so every node still evicts the same roots, but the least recently used root of one partition can outlive more recently used roots of another.
+
 ## Owner revisions
 
 Each `(specification, schemaVersion, identity)` has a positive, monotonically increasing revision allocated by the **data owner**. Prefer a database version or durable per-entity event sequence. Revisions must order cache mutations, including invalidations; a node-local counter or wall clock alone is insufficient for concurrent owners.

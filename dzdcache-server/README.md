@@ -185,6 +185,7 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.cluster-tls.bundle` | required when enabled; a `spring.ssl.bundle.*` name |
 | `dzdcache.cluster-tls.client-auth` | `none`; `need` requires trusted client certificates (mTLS) |
 | `dzdcache.cluster-tls.verify-hostname` | `true`; certificates then need IP SANs for pod IPs |
+| `dzdcache.partitions` | 1; `DZDCACHE_PARTITIONS`; replication groups for writes, each with its own master; fixed when the cluster is founded; not for two nodes |
 | `dzdcache.persistence.enabled` | `false`; `DZDCACHE_PERSISTENCE_ENABLED`; keeps the log, term and vote on disk |
 | `dzdcache.persistence.directory` | `/var/lib/dzdcache`; `DZDCACHE_PERSISTENCE_DIRECTORY` |
 | `dzdcache.persistence.segment-bytes` | 64 MiB; size of one journal file |

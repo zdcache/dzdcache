@@ -48,6 +48,7 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
                     .withEnv("DZDCACHE_API_TOKEN", TOKEN).withEnv("DZDCACHE_CLUSTER_TOKEN", "benchmark-cluster")
                     .withEnv("DZDCACHE_MAX_SEARCH_RESULTS", "1000000").withEnv("LOGGING_LEVEL_ROOT", "WARN")
                     .withEnv("DZDCACHE_PERSISTENCE_ENABLED", String.valueOf(Boolean.getBoolean("dzdcache.benchmark.persistence")))
+                    .withEnv("DZDCACHE_PARTITIONS", System.getProperty("dzdcache.benchmark.partitions", "1"))
                     .waitingFor(Wait.forHttp("/actuator/health/liveness").forPort(8080).withStartupTimeout(Duration.ofMinutes(2)));
                 containers.add(container);
             }
@@ -115,7 +116,8 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
     @Override public String settings() {
         return "3 dzdcache server containers (" + image + ") on a Docker network; JSON over HTTP/1.1 from java.net.http to server 2 "
             + "through Docker's port mapping; JSON-only registration with the same dimensions"
-            + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, journal inside each container" : "");
+            + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, journal inside each container" : "")
+            + (Integer.getInteger("dzdcache.benchmark.partitions", 1) > 1 ? "; " + Integer.getInteger("dzdcache.benchmark.partitions") + " partitions" : "");
     }
     @Override public void load(Person[] people) {
         for (int start = 0; start < people.length; start += 1_000) {

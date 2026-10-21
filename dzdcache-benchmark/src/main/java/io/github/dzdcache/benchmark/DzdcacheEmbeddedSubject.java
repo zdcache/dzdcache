@@ -61,6 +61,7 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
                 "--dzdcache.cluster-token=benchmark", "--dzdcache.max-search-results=1000000", "--benchmark.capacity=" + capacity,
                 "--logging.level.root=WARN", "--spring.main.banner-mode=off"));
             if (Boolean.getBoolean("dzdcache.benchmark.persistence")) args.add("--benchmark.disk=" + disk(i));
+            args.add("--dzdcache.partitions=" + System.getProperty("dzdcache.benchmark.partitions", "1"));
             int peer = 0;
             for (int j = 0; j < 3; j++) if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://127.0.0.1:" + ports[j]);
             nodes.add(new SpringApplicationBuilder(Node.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new)));
@@ -88,7 +89,8 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
     @Override public String settings() {
         return "3 Spring Boot starter instances in one JVM over TCP cluster ports; exact city, prefix name, range age, "
             + "compound city+age and exact-each tags; reads are local on instance 2 and wait for a read lease"
-            + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, a journal per instance on the local disk" : "");
+            + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, a journal per instance on the local disk" : "")
+            + (Integer.getInteger("dzdcache.benchmark.partitions", 1) > 1 ? "; " + Integer.getInteger("dzdcache.benchmark.partitions") + " partitions" : "");
     }
     @Override public void load(Person[] people) {
         for (int start = 0; start < people.length; start += 1_000) {
