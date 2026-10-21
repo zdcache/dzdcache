@@ -144,6 +144,9 @@ paths:
       responses:
         '200':
           description: Full root graph, or only the selected fields
+          headers:
+            X-Dzdcache-Stale: {$ref: '#/components/headers/Stale'}
+            X-Dzdcache-Staleness-Ms: {$ref: '#/components/headers/StalenessMs'}
           content:
             application/json:
               schema: {type: object, additionalProperties: true}
@@ -184,6 +187,9 @@ paths:
       responses:
         '200':
           description: Matching complete root graphs, including an authoritative empty array
+          headers:
+            X-Dzdcache-Stale: {$ref: '#/components/headers/Stale'}
+            X-Dzdcache-Staleness-Ms: {$ref: '#/components/headers/StalenessMs'}
           content:
             application/json:
               schema:
@@ -215,6 +221,13 @@ paths:
         '204': {description: Eviction delivered}
         default: {$ref: '#/components/responses/Error'}
 components:
+  headers:
+    Stale:
+      description: Present and true when this node could not confirm it has every acknowledged write and answered from its own copy because dzdcache.max-staleness allows it.
+      schema: {type: boolean}
+    StalenessMs:
+      description: With X-Dzdcache-Stale, how long ago this node last knew its data was current, in milliseconds; never more than dzdcache.max-staleness.
+      schema: {type: integer, minimum: 0}
   securitySchemes:
     apiBearer:
       type: http

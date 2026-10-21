@@ -22,6 +22,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         static Outcome applied(EntryMutation mutation) { return new Outcome(200, null, mutation); }
     }
     public enum Role { STARTING, FOLLOWER, CANDIDATE, MASTER }
+    public record Read(boolean fresh, long staleMillis) {
+        public static final Read FRESH = new Read(true, 0);
+    }
     public record ClusterView(int size, List<Member> members, Member master, Integer previousSize, List<Member> previousMembers) { }
 
     private final RaftGroup control;
@@ -63,7 +66,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public void requireReady() { control.requireReady(); }
     public boolean current() { return control.current(); }
     public void requireCurrent() { control.requireCurrent(); }
-    public void awaitCurrent() { control.awaitCurrent(); }
+    public Read awaitCurrent() { return control.awaitCurrent(); }
+    public long staleMillis() { return control.staleMillis(); }
+    public boolean servesStale() { return control.servesStale(); }
     public SchemaView publish(TypeDescriptor schema) { return control.publish(schema); }
     public List<Outcome> put(List<PutRequest> puts) { return control.put(puts); }
     public Outcome change(EntryMutation mutation) { return control.change(mutation); }

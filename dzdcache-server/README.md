@@ -178,6 +178,7 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.election-timeout` | 1 second |
 | `dzdcache.read-lease` | 500 milliseconds |
 | `dzdcache.read-wait` | 3 seconds; how long a read waits for its node to become current before answering 503 |
+| `dzdcache.max-staleness` | 0, never answer stale; above 0, a node that cannot confirm it has every acknowledged write answers from its own copy if that was current at most this long ago, and says so (`X-Dzdcache-Stale`, `X-Dzdcache-Staleness-Ms` in the server); it then also stays ready |
 | `dzdcache.two-node-takeover` | 3 seconds; not used with a witness |
 | `dzdcache.witness-url` | none; the cluster URL of a witness for a two-node cluster |
 | `dzdcache.member-timeout` | 30 seconds |

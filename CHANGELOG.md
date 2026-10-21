@@ -10,6 +10,7 @@
 
 - Persistence for the server: with `dzdcache.persistence.enabled`, each node keeps its log, term and vote in a journal under `dzdcache.persistence.directory`, and a write is acknowledged once it is on the disks of a majority. Writes arriving together share one fsync, and the journal is compacted into snapshots. A restarted node keeps its slot and catches up from where its disk ends; a cluster whose nodes all restart keeps its schemas and data. `k8s/dzdcache.yaml` gives each pod a volume.
 - `dzdcache.cluster-transport: http2` sends cluster traffic over HTTP/2 on the application's own servlet web server (Tomcat in the server), for networks where only HTTP gets through. The default stays the framed TCP transport, which was about twice as fast in Docker.
+- `dzdcache.max-staleness` lets a node that cannot confirm it is current answer from its own copy instead of 503, labelled as stale with its age, and stay ready while it does. The default, 0, keeps reads fresh or refused.
 - Metrics for each step of a write: `dzdcache.write.duration`, `dzdcache.write.stage`, `dzdcache.cluster.round-trip`, `dzdcache.cluster.handled`, `dzdcache.cluster.loop.delay`, and with persistence `dzdcache.storage.fsync`, `dzdcache.storage.batch` and `dzdcache.storage.bytes`.
 
 ### Changed

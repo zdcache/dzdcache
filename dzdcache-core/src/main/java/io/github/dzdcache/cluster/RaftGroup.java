@@ -174,6 +174,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private boolean snapshotting;
     private boolean persistingInstall;
     private volatile boolean recovering;
+    private volatile long freshUntil = Long.MIN_VALUE;
     private final List<Runnable> afterSync = new ArrayList<>();
 
     RaftGroup(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
@@ -265,7 +266,16 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         if (!current()) throw new CacheException(503, "This node cannot confirm that it has every acknowledged write");
     }
 
-    public void awaitCurrent() {
+    public ClusterCoordinator.Read awaitCurrent() {
+        if (current()) return ClusterCoordinator.Read.FRESH;
+        long allowed = properties.getMaxStaleness().toMillis();
+        if (allowed > 0) {
+            long age = staleMillis();
+            if (age >= 0 && age <= allowed) {
+                meters.counter("dzdcache.reads.stale", "reason", notCurrentReason()).increment();
+                return new ClusterCoordinator.Read(false, age);
+            }
+        }
         long deadline = System.nanoTime() + properties.getReadWait().toNanos();
         synchronized (currency) {
             while (!current()) {
@@ -280,6 +290,25 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new CacheException(503, "Interrupted"); }
             }
         }
+        return ClusterCoordinator.Read.FRESH;
+    }
+
+    public boolean servesStale() {
+        long allowed = properties.getMaxStaleness().toMillis();
+        long age = staleMillis();
+        return allowed > 0 && age >= 0 && age <= allowed;
+    }
+
+    public long staleMillis() {
+        if (current()) return 0;
+        long until = freshUntil;
+        return !ready() || until == Long.MIN_VALUE ? -1 : Math.max(0, timers.elapsed() - until);
+    }
+
+    private void noteFresh() {
+        if (role == Role.MASTER) {
+            if (timers.elapsed() >= servingFrom && appliedIndex >= noopIndex) freshUntil = Math.max(freshUntil, masterLeaseUntil);
+        } else if (appliedIndex >= leaseIndex && leaseUntil > Long.MIN_VALUE / 2) freshUntil = Math.max(freshUntil, leaseUntil);
     }
 
     private String notCurrentReason() {
@@ -290,7 +319,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         return now >= leaseUntil ? "no-lease" : "catching-up";
     }
 
-    private void changedCurrency() { synchronized (currency) { currency.notifyAll(); } }
+    private void changedCurrency() {
+        noteFresh();
+        synchronized (currency) { currency.notifyAll(); }
+    }
 
     public SchemaView publish(TypeDescriptor schema) { return await(publishAsync(schema)); }
     public List<Outcome> put(List<PutRequest> puts) { return await(putAsync(puts)); }
@@ -696,6 +728,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         members = List.of();
         clusterId = null;
         holder.replace(holder.fresh());
+        freshUntil = Long.MIN_VALUE;
         log.reset(0, 0);
         configs.clear();
         commitIndex = 0;
@@ -857,7 +890,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         for (long time : times) {
             Set<String> ids = new HashSet<>();
             confirmed.forEach((id, at) -> { if (at >= time) ids.add(id); });
-            if (config().reached(ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); return; }
+            if (config().reached(ids)) { masterLeaseUntil = time + properties.getReadLease().toMillis(); noteFresh(); return; }
         }
         masterLeaseUntil = Long.MIN_VALUE / 2;
     }

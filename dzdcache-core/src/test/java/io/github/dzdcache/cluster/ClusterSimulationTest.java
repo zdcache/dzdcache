@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ClusterSimulationTest {
     private static PutRequest put(SimulatedCluster cluster, long id, String name, long revision) {
@@ -744,6 +745,53 @@ class ClusterSimulationTest {
         assertThat(cluster.runUntil(() -> c.coordinator.current(), 5_000)).isTrue();
         assertThat(cluster.read(c, 1)).isEqualTo(1L);
         assertThat(cluster.staleReads).isEmpty();
+    }
+
+    @Test void withMaxStalenessAnIsolatedFollowerAnswersStaleWithinTheBoundAndRefusesBeyondIt() {
+        SimulatedCluster cluster = new SimulatedCluster(27);
+        cluster.properties.setMaxStaleness(java.time.Duration.ofSeconds(2));
+        cluster.properties.setReadWait(java.time.Duration.ZERO);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        assertThat(cluster.runUntil(c.coordinator::current, 5_000)).isTrue();
+        assertThat(c.coordinator.awaitCurrent()).isEqualTo(ClusterCoordinator.Read.FRESH);
+        cluster.isolate("c");
+        assertThat(cluster.runUntil(() -> !c.coordinator.current(), 5_000)).isTrue();
+        cluster.run(1_000);
+        ClusterCoordinator.Read stale = c.coordinator.awaitCurrent();
+        assertThat(stale.fresh()).isFalse();
+        assertThat(stale.staleMillis()).isBetween(500L, 2_000L);
+        assertThat(c.meters.counter("dzdcache.reads.stale", "reason", "no-lease").count()).isEqualTo(1);
+        cluster.run(2_000);
+        assertThatThrownBy(c.coordinator::awaitCurrent).isInstanceOfSatisfying(io.github.dzdcache.cache.CacheException.class,
+            refused -> assertThat(refused.status()).isEqualTo(503));
+        cluster.heal();
+        assertThat(cluster.runUntil(c.coordinator::current, 5_000)).isTrue();
+        assertThat(c.coordinator.awaitCurrent()).isEqualTo(ClusterCoordinator.Read.FRESH);
+    }
+
+    @Test void withoutMaxStalenessAnIsolatedFollowerRefusesAtOnce() {
+        SimulatedCluster cluster = new SimulatedCluster(28);
+        cluster.properties.setReadWait(java.time.Duration.ZERO);
+        started(cluster, "a", "b", "c");
+        SimulatedCluster.Node c = cluster.nodes.get("c");
+        assertThat(cluster.runUntil(c.coordinator::current, 5_000)).isTrue();
+        cluster.isolate("c");
+        assertThat(cluster.runUntil(() -> !c.coordinator.current(), 5_000)).isTrue();
+        assertThatThrownBy(c.coordinator::awaitCurrent).isInstanceOf(io.github.dzdcache.cache.CacheException.class);
+    }
+
+    @Test void aJoiningNodeNeverAnswersStale() {
+        SimulatedCluster cluster = new SimulatedCluster(29);
+        cluster.properties.setMaxStaleness(java.time.Duration.ofMinutes(5));
+        cluster.properties.setReadWait(java.time.Duration.ZERO);
+        started(cluster, "a", "b");
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThatThrownBy(c.coordinator::awaitCurrent).isInstanceOfSatisfying(io.github.dzdcache.cache.CacheException.class,
+            refused -> assertThat(refused.getMessage()).contains("joining"));
     }
 
     @Test void aDeposedMasterStopsServingBeforeTheNewMasterAcknowledgesAnything() {

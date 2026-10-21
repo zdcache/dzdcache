@@ -18,7 +18,9 @@ public class DzdCacheHealthIndicator implements HealthIndicator {
 
     @Override public Health health() {
         if (witness) return Health.up().withDetail("role", "WITNESS").build();
-        return (cluster.current() || cluster.bootstrapping() ? Health.up() : Health.outOfService())
+        boolean current = cluster.current();
+        return (current || cluster.bootstrapping() || cluster.servesStale() ? Health.up() : Health.outOfService())
+            .withDetail("staleMillis", current ? 0 : cluster.staleMillis())
             .withDetail("role", cluster.role()).withDetail("term", cluster.term())
             .withDetail("master", cluster.master() == null ? "none" : cluster.master().id())
             .withDetail("members", cluster.members().size()).withDetail("appliedIndex", cluster.appliedIndex()).withDetail("current", cluster.current()).withDetail("bootstrapping", cluster.bootstrapping()).withDetail("clusterSize", cluster.clusterSize()).withDetail("resizing", cluster.view().previousSize() != null)

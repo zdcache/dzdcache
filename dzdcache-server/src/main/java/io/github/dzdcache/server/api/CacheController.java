@@ -86,21 +86,24 @@ public class CacheController {
         }
         return result;
     }
+    private static ResponseEntity.BodyBuilder answer(ResponseEntity.BodyBuilder response, ClusterCoordinator.Read read) {
+        return read.fresh() ? response : response.header("X-Dzdcache-Stale", "true").header("X-Dzdcache-Staleness-Ms", Long.toString(read.staleMillis()));
+    }
     @PostMapping("/entries/get") public ResponseEntity<byte[]> get(@RequestBody IdentityRequest request) {
-        cluster.awaitCurrent();
+        ClusterCoordinator.Read read = cluster.awaitCurrent();
         Timer.Sample sample = Timer.start(meters);
         byte[] graph = engines.engine().getJson(request.specification(), request.schemaVersion(), request.identity(), request.fields());
         sample.stop(meters.timer("dzdcache.get", "specification", request.specification(), "outcome", graph == null ? "miss" : "hit"));
-        return graph == null ? ResponseEntity.notFound().build() : ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(graph);
+        return graph == null ? answer(ResponseEntity.status(404), read).build() : answer(ResponseEntity.ok(), read).contentType(MediaType.APPLICATION_JSON).body(graph);
     }
     @PostMapping("/search") public ResponseEntity<byte[]> search(@RequestBody SearchRequest request) {
-        cluster.awaitCurrent();
+        ClusterCoordinator.Read read = cluster.awaitCurrent();
         Timer.Sample sample = Timer.start(meters);
         CacheEngine.Rendered found = engines.engine().searchJson(request.specification(), request.schemaVersion(), request.dimension(),
             request.value(), request.from(), request.to(), request.limit(), request.fields());
         sample.stop(meters.timer("dzdcache.search", "specification", request.specification(), "dimension", request.dimension()));
         meters.summary("dzdcache.search.results", "specification", request.specification()).record(found.count());
-        return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(found.json());
+        return answer(ResponseEntity.ok(), read).contentType(MediaType.APPLICATION_JSON).body(found.json());
     }
     @PostMapping("/entries/invalidate") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void invalidate(@RequestBody RemoveRequest request) {

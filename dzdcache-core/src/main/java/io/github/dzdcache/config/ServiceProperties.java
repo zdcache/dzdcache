@@ -16,6 +16,7 @@ public class ServiceProperties {
     private Duration readLease = Duration.ofMillis(500);
     private Duration twoNodeTakeover = Duration.ofSeconds(3);
     private Duration readWait = Duration.ofSeconds(3);
+    private Duration maxStaleness = Duration.ZERO;
     private java.net.URI witnessUrl;
     private Duration memberTimeout = Duration.ofSeconds(30);
     private long logRetentionBytes = 64L * 1024 * 1024;
@@ -38,6 +39,7 @@ public class ServiceProperties {
         if (readLease == null || readLease.compareTo(heartbeatInterval.multipliedBy(2)) < 0 || readLease.compareTo(electionTimeout) > 0)
             throw new IllegalArgumentException("read-lease must be at least twice heartbeat-interval and at most election-timeout");
         if (readWait == null || readWait.isNegative()) throw new IllegalArgumentException("read-wait cannot be negative");
+        if (maxStaleness == null || maxStaleness.isNegative()) throw new IllegalArgumentException("max-staleness cannot be negative");
         if (witnessUrl != null && clusterSize != 0 && clusterSize != 2)
             throw new IllegalArgumentException("witness-url is only for a cluster of two nodes");
         if (twoNodeTakeover == null || twoNodeTakeover.compareTo(electionTimeout) < 0)
@@ -57,6 +59,7 @@ public class ServiceProperties {
             throw new IllegalArgumentException("cluster-transport must be tcp or http2");
     }
     public String getClusterTransport() { return clusterTransport; } public void setClusterTransport(String v) { clusterTransport = v; }
+    public Duration getMaxStaleness() { return maxStaleness; } public void setMaxStaleness(Duration v) { maxStaleness = v; }
     public int getMaxSchemas() { return maxSchemas; } public void setMaxSchemas(int v) { maxSchemas = v; }
     public int getMaxRevisionsPerSchema() { return maxRevisionsPerSchema; } public void setMaxRevisionsPerSchema(int v) { maxRevisionsPerSchema = v; }
     public int getMaxRequestBytes() { return maxRequestBytes; } public void setMaxRequestBytes(int v) { maxRequestBytes = v; }

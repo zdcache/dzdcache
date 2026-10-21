@@ -23,6 +23,8 @@ A read that starts after a write was acknowledged, on any node, returns that wri
 
 Leases use each node's monotonic clock; they need clock rates to agree within a few percent, not synchronized clocks. Readiness reports whether a node can serve fresh reads, so traffic moves away from a node as it loses its lease; a client that keeps a direct connection gets 503 rather than older data.
 
+**Stale reads by choice.** With `dzdcache.max-staleness` above 0, a node that cannot confirm it is current answers from its own copy instead of 503, as long as it was last current at most that long ago, and labels the answer as stale with its age. Such an answer can miss acknowledged writes. A fresh answer keeps every guarantee above; a node that has never been current, or is joining, still answers 503.
+
 ## Owner revisions
 
 Each `(specification, schemaVersion, identity)` has a positive, monotonically increasing revision allocated by the **data owner**. Prefer a database version or durable per-entity event sequence. Revisions must order cache mutations, including invalidations; a node-local counter or wall clock alone is insufficient for concurrent owners.
