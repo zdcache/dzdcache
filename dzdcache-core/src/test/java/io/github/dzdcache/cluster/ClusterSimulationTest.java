@@ -452,6 +452,25 @@ class ClusterSimulationTest {
         assertThat(cluster.staleReads).isEmpty();
     }
 
+    @Test void aResizeThatRemovesTheMasterCompletesAndARemainingMemberTakesOverAtOnce() {
+        SimulatedCluster cluster = new SimulatedCluster(26);
+        TypeDescriptor students = cluster.students(1_000);
+        started(cluster, "a", "b", "c", "d", "e");
+        SimulatedCluster.Node a = master(cluster);
+        assertThat(a.id).isEqualTo("a");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 5; id++) assertThat(status(cluster.await(tracked(cluster, "c", id, 1), 5_000))).isEqualTo(200);
+        long started = cluster.now();
+        resize(cluster, "c", 3, "a", "b");
+        assertThat(cluster.runUntil(() -> cluster.mastersNow().stream().anyMatch(node -> List.of("c", "d", "e").contains(node.id)), 5_000)).isTrue();
+        assertThat(cluster.now() - started).as("the new master is in place well within an election timeout of the change")
+            .isLessThan(cluster.properties.getElectionTimeout().toMillis() * 2);
+        assertThat(status(cluster.await(tracked(cluster, "d", 6, 1), 5_000))).isEqualTo(200);
+        assertThat(cluster.nodes.get("c").coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("c", "d", "e");
+        assertThat(cluster.violations).isEmpty();
+        assertThat(cluster.staleReads).isEmpty();
+    }
+
     @Test void aPairGrowsToThreeAndShrinksBackToTheTwoNodeRules() {
         SimulatedCluster cluster = new SimulatedCluster(25);
         TypeDescriptor students = cluster.students(1_000);
