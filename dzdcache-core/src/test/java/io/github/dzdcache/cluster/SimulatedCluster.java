@@ -38,6 +38,8 @@ final class SimulatedCluster {
     private final Set<String> cuts = new HashSet<>();
     final Map<String, Witness> witnesses = new HashMap<>();
     static volatile boolean persistentByDefault;
+    static volatile int partitionsByDefault = 1;
+    private boolean partitionsChosen;
     boolean persistent = persistentByDefault;
     long snapshotBytes = 4_000;
     final Map<String, SimulatedDisk> disks = new HashMap<>();
@@ -89,7 +91,7 @@ final class SimulatedCluster {
             Storage storage = persistent ? disk(id) : Storage.none();
             this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
                 new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), properties, meters, timers,
-                new SplittableRandom(random.nextLong()), mapper, storage);
+                new SplittableRandom(random.nextLong()), mapper, storage, group -> timers);
         }
         CacheEngine engine() { return holder.engine(); }
     }
@@ -128,6 +130,11 @@ final class SimulatedCluster {
     Node start(String id) {
         if (!addresses.contains(id)) addresses.add(id);
         if (!fixedSize) properties.setClusterSize(addresses.size());
+        if (!partitionsChosen) {
+            partitionsChosen = true;
+            boolean pair = properties.getClusterSize() == 2 || properties.getWitnessUrl() != null || !fixedSize && addresses.size() <= 2;
+            if (partitionsByDefault > 1) properties.setPartitions(pair ? 1 : partitionsByDefault);
+        }
         Node node = new Node(id);
         nodes.put(id, node);
         groups.putIfAbsent(id, 0);

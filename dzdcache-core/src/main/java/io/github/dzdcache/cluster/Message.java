@@ -34,13 +34,17 @@ import java.util.List;
     @JsonSubTypes.Type(value = Message.WitnessClaim.class, name = "witness-claim"),
     @JsonSubTypes.Type(value = Message.WitnessGrant.class, name = "witness-grant"),
     @JsonSubTypes.Type(value = Message.Ack.class, name = "ack"),
+    @JsonSubTypes.Type(value = Message.Grouped.class, name = "grouped"),
+    @JsonSubTypes.Type(value = Message.TakeOver.class, name = "take-over"),
     @JsonSubTypes.Type(value = Message.Refused.class, name = "refused")})
 public sealed interface Message {
     record Append(long term, Member master, long previousIndex, long previousTerm, List<LogEntry> entries, long commitIndex,
                   List<String> members, boolean inSync, String clusterId, long lastIndex) implements Message { }
     record Appended(long term, boolean success, long matchIndex, long lastIndex, boolean snapshotNeeded, boolean installing,
                     boolean mustYield, List<String> members, long appliedIndex) implements Message { }
-    record Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members) implements Message { }
+    record Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members, boolean transfer) implements Message {
+        public Vote(long term, Member candidate, long lastIndex, long lastTerm, List<String> members) { this(term, candidate, lastIndex, lastTerm, members, false); }
+    }
     record Voted(long term, boolean granted, boolean candidateIsMember, String clusterId) implements Message { }
     record SnapshotOffer(long term, Member master, String snapshotId, long index, long indexTerm, List<Member> members,
                          List<TypeDescriptor> schemas, String clusterId, int clusterSize, List<Member> previousMembers,
@@ -63,5 +67,7 @@ public sealed interface Message {
     record WitnessClaim(String clusterId, Member claimant, long term, long millis) implements Message { }
     record WitnessGrant(boolean granted, Member holder, long term) implements Message { }
     record Ack() implements Message { }
+    record Grouped(int group, Message message) implements Message { }
+    record TakeOver(long term, Member master) implements Message { }
     record Refused(int status, String message) implements Message { }
 }

@@ -20,8 +20,12 @@ public record LogEntry(long index, long term, long at, Payload payload, int byte
         @JsonSubTypes.Type(value = Noop.class, name = "noop")})
     public sealed interface Payload permits Publish, Mutations, Accesses, Membership, Sweep, Noop { }
     public record Publish(TypeDescriptor schema) implements Payload { }
-    public record Mutations(List<EntryMutation> mutations) implements Payload { }
-    public record Accesses(List<Access> accesses) implements Payload { }
+    public record Mutations(List<EntryMutation> mutations, long controlIndex) implements Payload {
+        public Mutations(List<EntryMutation> mutations) { this(mutations, 0); }
+    }
+    public record Accesses(List<Access> accesses, long controlIndex) implements Payload {
+        public Accesses(List<Access> accesses) { this(accesses, 0); }
+    }
     public record Membership(List<Member> members, int size, List<Member> previousMembers, int previousSize) implements Payload {
         public Membership(List<Member> members, int size) { this(members, size, null, 0); }
     }

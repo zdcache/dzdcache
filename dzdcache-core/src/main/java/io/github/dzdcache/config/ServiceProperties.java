@@ -21,6 +21,7 @@ public class ServiceProperties {
     private long logRetentionBytes = 64L * 1024 * 1024;
     private int clusterPort = 7070;
     private int clusterSize;
+    private int partitions = 1;
     private String apiToken = "";
     private String clusterToken = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
@@ -52,7 +53,11 @@ public class ServiceProperties {
             throw new IllegalArgumentException("Replication timeout and sync interval must be at least one millisecond");
         if (apiToken == null || clusterToken == null) throw new IllegalArgumentException("Tokens cannot be null");
         if (clusterSize < 0) throw new IllegalArgumentException("cluster-size cannot be negative");
+        if (partitions < 1 || partitions > 64) throw new IllegalArgumentException("partitions must be between 1 and 64");
+        if (partitions > 1 && (clusterSize == 2 || witnessUrl != null))
+            throw new IllegalArgumentException("partitions above 1 need a cluster of one or at least three nodes; the two-node rules apply to one log");
     }
+    public int getPartitions() { return partitions; } public void setPartitions(int v) { partitions = v; }
     public int getMaxSchemas() { return maxSchemas; } public void setMaxSchemas(int v) { maxSchemas = v; }
     public int getMaxRevisionsPerSchema() { return maxRevisionsPerSchema; } public void setMaxRevisionsPerSchema(int v) { maxRevisionsPerSchema = v; }
     public int getMaxRequestBytes() { return maxRequestBytes; } public void setMaxRequestBytes(int v) { maxRequestBytes = v; }

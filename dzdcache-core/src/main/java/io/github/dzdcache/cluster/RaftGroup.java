@@ -175,52 +175,115 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private boolean persistingInstall;
     private volatile boolean recovering;
     private final List<Runnable> afterSync = new ArrayList<>();
+    private final int partitions;
+    private final Tags groupTags;
+    private RaftGroup control;
+    private List<RaftGroup> dataGroups = List.of();
+    private long nextTransfer;
+    private Member transferringTo;
+    private volatile Config committedConfig;
+    private long transferUntil;
 
     RaftGroup(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
               ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random, ObjectMapper mapper) {
-        this(0, holder, directory, transport, self, properties, meters, timers, random, mapper, Storage.none(), null);
+        this(0, 1, holder, directory, transport, self, properties, meters, timers, random, mapper, Storage.none(), null);
     }
 
-    RaftGroup(int group, EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
+    RaftGroup(int group, int partitions, EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
               ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random, ObjectMapper mapper,
               Storage storage, Storage.Recovery recovery) {
-        this.group = group; this.storage = storage; this.recovery = recovery;
+        this.group = group; this.partitions = partitions; this.storage = storage; this.recovery = recovery;
+        this.groupTags = partitions > 1 ? Tags.of("group", Integer.toString(group)) : Tags.empty();
         this.holder = holder; this.directory = directory; this.transport = transport; this.self = self;
         this.properties = properties; this.meters = meters; this.timers = timers; this.random = random; this.mapper = mapper;
-        Gauge.builder("dzdcache.ready", this, coordinator -> coordinator.ready() ? 1 : 0).register(meters);
-        Gauge.builder("dzdcache.master", this, coordinator -> coordinator.role == Role.MASTER ? 1 : 0).register(meters);
-        Gauge.builder("dzdcache.term", this, coordinator -> coordinator.term).register(meters);
-        Gauge.builder("dzdcache.members", this, coordinator -> coordinator.members.size()).register(meters);
-        Gauge.builder("dzdcache.applied.index", this, coordinator -> coordinator.appliedIndex).register(meters);
-        Gauge.builder("dzdcache.current", this, coordinator -> coordinator.current() ? 1 : 0).register(meters);
-        Gauge.builder("dzdcache.cluster.size", this, coordinator -> coordinator.size()).register(meters);
-        Gauge.builder("dzdcache.resize.in.progress", this, coordinator -> coordinator.config().joint() ? 1 : 0).register(meters);
-        Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).register(meters);
-        Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).register(meters);
+        Gauge.builder("dzdcache.ready", this, coordinator -> coordinator.ready() ? 1 : 0).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.master", this, coordinator -> coordinator.role == Role.MASTER ? 1 : 0).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.term", this, coordinator -> coordinator.term).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.members", this, coordinator -> coordinator.members.size()).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.applied.index", this, coordinator -> coordinator.appliedIndex).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.current", this, coordinator -> coordinator.current() ? 1 : 0).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.cluster.size", this, coordinator -> coordinator.size()).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.resize.in.progress", this, coordinator -> coordinator.config().joint() ? 1 : 0).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).tags(groupTags).register(meters);
+        Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).tags(groupTags).register(meters);
         lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
-        entries = MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters);
-        revisions = MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters);
-        loopDelay = meters.timer("dzdcache.cluster.loop.delay");
-        committed = meters.timer("dzdcache.write.stage", "stage", "commit");
-        acknowledged = meters.timer("dzdcache.write.stage", "stage", "acknowledge");
-        writtenOnMaster = meters.timer("dzdcache.write.duration", "route", "master");
-        writtenForwarded = meters.timer("dzdcache.write.duration", "route", "forwarded");
+        entries = group == 0 ? MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters) : null;
+        revisions = group == 0 ? MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters) : null;
+        loopDelay = meters.timer("dzdcache.cluster.loop.delay", groupTags);
+        committed = meters.timer("dzdcache.write.stage", groupTags.and("stage", "commit"));
+        acknowledged = meters.timer("dzdcache.write.stage", groupTags.and("stage", "acknowledge"));
+        writtenOnMaster = meters.timer("dzdcache.write.duration", groupTags.and("route", "master"));
+        writtenForwarded = meters.timer("dzdcache.write.duration", groupTags.and("route", "forwarded"));
     }
 
     private Timer timer(Map<Class<?>, Timer> cache, String name, Message message) {
-        return cache.computeIfAbsent(message.getClass(), type -> meters.timer(name, "type", type.getSimpleName()));
+        return cache.computeIfAbsent(message.getClass(), type -> meters.timer(name, groupTags.and("type", type.getSimpleName())));
+    }
+
+    private io.micrometer.core.instrument.Counter counter(String name, String... tags) { return meters.counter(name, groupTags.and(tags)); }
+
+    void attach(RaftGroup control, List<RaftGroup> dataGroups) { this.control = control; this.dataGroups = List.copyOf(dataGroups); }
+
+    private void wake() {
+        timers.execute(() -> { if (!closed && appliedIndex < commitIndex) applyCommitted(); });
+    }
+
+    private boolean wholeEngine() { return partitions == 1; }
+    private int partition() { return group - 1; }
+
+    private CacheEngine.Capture scopeCapture(CacheEngine engine) {
+        return wholeEngine() ? engine.capture() : group == 0 ? engine.captureSchemas() : engine.capture(partition());
+    }
+
+    private CacheEngine installTarget(List<TypeDescriptor> schemas) {
+        CacheEngine target = wholeEngine() ? holder.fresh() : holder.engine();
+        for (TypeDescriptor schema : schemas) target.publish(schema);
+        if (!wholeEngine() && group > 0) target.clear(partition());
+        return target;
+    }
+
+    private void installed(CacheEngine target) { if (wholeEngine()) holder.replace(target); }
+
+    private void resetScope() {
+        if (wholeEngine()) holder.replace(holder.fresh());
+        else if (group > 0) holder.engine().clear(partition());
+    }
+
+    private long controlIndex() { return group > 0 ? control.appliedIndex() : 0; }
+
+    private boolean blockedOnControl() {
+        return group > 0 && appliedIndex < commitIndex && appliedIndex + 1 <= log.lastIndex() && appliedIndex >= log.baseIndex()
+            && controlIndexOf(log.get(appliedIndex + 1)) > control.appliedIndex();
+    }
+
+    private static long controlIndexOf(LogEntry entry) {
+        return switch (entry.payload()) {
+            case LogEntry.Mutations mutations -> mutations.controlIndex();
+            case LogEntry.Accesses accesses -> accesses.controlIndex();
+            default -> 0;
+        };
+    }
+
+    private Message wire(Message message) { return group == 0 ? message : new Message.Grouped(group, message); }
+
+    private Member preferred() {
+        List<Member> members = config().members().stream().sorted(Comparator.comparing(Member::id)).toList();
+        return members.isEmpty() ? self : members.get((group - 1) % members.size());
     }
 
     private static long since(long nanos) { return System.nanoTime() - nanos; }
 
-    public void start() {
+    public CompletableFuture<Void> start() {
+        CompletableFuture<Void> recovered = new CompletableFuture<>();
         timers.execute(() -> {
-            if (recovery != null && !recovery.empty()) recover(recovery);
+            try { if (recovery != null && !recovery.empty()) recover(recovery); }
+            finally { recovered.complete(null); }
             long now = timers.now();
             nextDiscovery = now;
             nextFlush = now + properties.getAccessFlushInterval().toMillis();
             tick();
         });
+        return recovered;
     }
 
     public boolean ready() { return installed && !recovering && role != Role.STARTING && members.contains(self) && config().includes(self); }
@@ -254,7 +317,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public void requireReady() { if (!ready()) throw new CacheException(503, "Cache is joining the cluster"); }
 
     public boolean current() {
-        if (!ready()) return false;
+        if (!ready() || group > 0 && (install != null || persistingInstall)) return false;
         long now = timers.elapsed();
         if (role == Role.MASTER) return now >= servingFrom && now < masterLeaseUntil && appliedIndex >= noopIndex;
         return now < leaseUntil && appliedIndex >= leaseIndex;
@@ -265,14 +328,15 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         if (!current()) throw new CacheException(503, "This node cannot confirm that it has every acknowledged write");
     }
 
-    public void awaitCurrent() {
-        long deadline = System.nanoTime() + properties.getReadWait().toNanos();
+    public void awaitCurrent() { awaitCurrent(System.nanoTime() + properties.getReadWait().toNanos()); }
+
+    public void awaitCurrent(long deadline) {
         synchronized (currency) {
             while (!current()) {
                 long left = (deadline - System.nanoTime()) / 1_000_000;
                 if (left <= 0) {
                     String reason = notCurrentReason();
-                    meters.counter("dzdcache.reads.refused", "reason", reason).increment();
+                    counter("dzdcache.reads.refused", "reason", reason).increment();
                     throw new CacheException(503, reason.equals("joining") ? "Cache is joining the cluster"
                         : "This node cannot confirm that it has every acknowledged write (" + reason + ")");
                 }
@@ -327,6 +391,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             case Message.ForwardChange request -> forwarded(request);
             case Message.ForwardResize request -> forwarded(request);
             case Message.LeaseRequest request -> CompletableFuture.completedFuture(onLeaseRequest(request));
+            case Message.TakeOver takeOver -> CompletableFuture.completedFuture(onTakeOver(takeOver));
             case Message.AccessReport report -> {
                 if (role != Role.MASTER) yield CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
                 reported.addAll(report.accesses());
@@ -350,7 +415,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
             Member current = master;
             if (role == Role.FOLLOWER && current != null && members.contains(self))
-                return transport.send(current.url(), new Message.Leave(self)).thenApply(reply -> null);
+                return transport.send(current.url(), wire(new Message.Leave(self))).thenApply(reply -> null);
             return CompletableFuture.completedFuture(null);
         });
         try { left.get(2, TimeUnit.SECONDS); }
@@ -362,7 +427,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         for (Member member : others) {
             Message.Append append = new Message.Append(template.term(), template.master(), template.previousIndex(), template.previousTerm(),
                 List.of(), template.commitIndex(), template.members(), synced.contains(member.id()), template.clusterId(), template.lastIndex());
-            sent.add(transport.send(member.url(), append).exceptionally(error -> null));
+            sent.add(transport.send(member.url(), wire(append)).exceptionally(error -> null));
         }
         return CompletableFuture.allOf(sent.toArray(CompletableFuture[]::new));
     }
@@ -370,7 +435,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public void crash() { closed = true; }
 
     @Override public void close() {
-        if (!closed) leave();
+        if (!closed && !storage.durable()) leave();
         closed = true;
         timers.close();
     }
@@ -399,7 +464,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void send(URI peer, Message message, Consumer<Message> onReply, Consumer<Throwable> onFailure) {
         CompletableFuture<Message> reply;
-        try { reply = transport.send(peer, message); }
+        try { reply = transport.send(peer, wire(message)); }
         catch (RuntimeException e) { reply = CompletableFuture.failedFuture(e); }
         long sent = System.nanoTime();
         reply.whenComplete((answer, error) -> {
@@ -427,6 +492,11 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void submit(Message request, long deadline, long started, CompletableFuture<Result> result) {
         if (closed) { result.completeExceptionally(new CacheException(503, "Node is stopping")); return; }
+        if (role == Role.MASTER && transferringTo != null) {
+            if (timers.now() >= deadline) result.completeExceptionally(new CacheException(503, "The master is handing over"));
+            else timers.schedule(properties.getHeartbeatInterval().toMillis(), () -> submit(request, deadline, started, result));
+            return;
+        }
         if (role == Role.MASTER) {
             CompletableFuture<Result> written = local(request);
             written.whenComplete((value, error) -> { if (error == null) writtenOnMaster.record(since(started), NANOSECONDS); });
@@ -513,7 +583,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private CompletableFuture<Message> forwarded(Message request) {
-        if (role != Role.MASTER) return CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
+        if (role != Role.MASTER || transferringTo != null) return CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
         return local(request).handle((result, error) -> {
             if (error == null) return new Message.Written(result.view(), result.outcomes());
             Throwable cause = error instanceof java.util.concurrent.CompletionException ? error.getCause() : error;
@@ -525,7 +595,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private CompletableFuture<Result> local(Message request) {
         return switch (request) {
             case Message.ForwardPublish publish -> appendLocal(new LogEntry.Publish(publish.schema()));
-            case Message.ForwardChange change -> appendLocal(new LogEntry.Mutations(List.of(change.mutation())));
+            case Message.ForwardChange change -> appendLocal(new LogEntry.Mutations(List.of(change.mutation()), controlIndex()));
             case Message.ForwardResize resize -> resizeLocal(resize.size(), Set.copyOf(resize.leaving()));
             case Message.ForwardPuts puts -> {
                 Outcome[] outcomes = new Outcome[puts.puts().size()];
@@ -537,7 +607,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                     catch (IllegalArgumentException | NullPointerException e) { outcomes[i] = new Outcome(400, e.getMessage(), null); }
                 }
                 if (valid.isEmpty()) yield CompletableFuture.completedFuture(new Result(null, Arrays.asList(outcomes)));
-                yield appendLocal(new LogEntry.Mutations(valid)).thenApply(result -> {
+                yield appendLocal(new LogEntry.Mutations(valid, controlIndex())).thenApply(result -> {
                     for (int k = 0; k < positions.size(); k++) outcomes[positions.get(k)] = result.outcomes().get(k);
                     return new Result(null, Arrays.asList(outcomes));
                 });
@@ -583,7 +653,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                     nextDiscovery = now + DISCOVERY_RETRY * 2;
                     join(master);
                 }
-                if (role == Role.FOLLOWER && installed && master != null && members.contains(self) && !leaseInFlight) renewLease();
+                if (role == Role.FOLLOWER && installed && master != null && members.contains(self) && !leaseInFlight && !blockedOnControl()) renewLease();
                 if (installed && members.contains(self) && config().includes(self) && now >= electionDeadline) startElection(now);
                 else if ((!members.contains(self) || !config().includes(self)) && install == null
                         && now - lastMasterContact > properties.getMemberTimeout().toMillis())
@@ -604,7 +674,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         knownPeers.addAll(peers);
         if (peers.isEmpty()) {
             bootstrapping = true;
-            if (size() <= 1) foundCluster(List.of());
+            if (group > 0) {
+                Config founding = control.committedConfig;
+                if (control.role() == Role.MASTER && founding != null && !founding.joint()) foundCluster(founding.members(), founding.size());
+            } else if (size() <= 1) foundCluster(List.of(), properties.getClusterSize());
             return;
         }
         Member started = self;
@@ -627,12 +700,18 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             startupProblem = null;
             Optional<Member> current = answers.stream().map(Message.Leader::master).filter(Objects::nonNull).findFirst();
             if (current.isPresent()) { bootstrapping = false; join(current.get()); return; }
+            if (group > 0) {
+                Config founding = control.committedConfig;
+                if (answers.stream().noneMatch(Message.Leader::member) && control.role() == Role.MASTER && founding != null && !founding.joint())
+                    foundCluster(founding.members(), founding.size());
+                return;
+            }
             boolean majorityAnswered = (answered[0] + 1) * 2 > size();
             boolean noCluster = answers.stream().noneMatch(Message.Leader::member);
             bootstrapping = noCluster;
             boolean best = answers.stream().allMatch(other -> ahead(other));
             if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
-                foundCluster(answers.stream().map(Message.Leader::self).toList());
+                foundCluster(answers.stream().map(Message.Leader::self).toList(), properties.getClusterSize());
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
@@ -664,7 +743,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private long bootstrapWait() { return properties.getElectionTimeout().toMillis() * 3; }
 
-    private void foundCluster(List<Member> answered) {
+    private void foundCluster(List<Member> answered, int clusterSize) {
         clusterId = String.format("%013d-%s", timers.now(), UUID.randomUUID());
         installed = true;
         List<Member> founders = new ArrayList<>(List.of(self));
@@ -673,8 +752,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         term = Math.max(term, 0) + 1;
         votedFor = self.id();
         becomeMaster(timers.now());
-        appendLocal(new LogEntry.Membership(members, properties.getClusterSize()));
-        LOG.info("Founded a cluster as {} with {}", self.id(), memberIds());
+        appendLocal(new LogEntry.Membership(members, clusterSize));
+        LOG.info("Founded {} as {} with {}", group == 0 ? "a cluster" : "group " + group, self.id(), memberIds());
     }
 
     private void join(Member current) {
@@ -695,7 +774,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         master = null;
         members = List.of();
         clusterId = null;
-        holder.replace(holder.fresh());
+        resetScope();
         log.reset(0, 0);
         configs.clear();
         commitIndex = 0;
@@ -712,14 +791,16 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         LOG.info("No longer a member; rejoining as {}", self);
     }
 
-    private void startElection(long now) {
+    private void startElection(long now) { startElection(now, false); }
+
+    private void startElection(long now, boolean transfer) {
         role = Role.CANDIDATE;
         term++;
         votedFor = self.id();
         votes = new HashSet<>(Set.of(self.id()));
         master = null;
         electionDeadline = now + electionTimeout();
-        meters.counter("dzdcache.elections").increment();
+        counter("dzdcache.elections").increment();
         if (elected()) { becomeMaster(now); return; }
         long electionTerm = term;
         if (witnessed() && !recovering) claimWitness(electionTerm, granted -> {
@@ -729,7 +810,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
         });
         Message.Vote request = new Message.Vote(electionTerm, self, log.lastIndex(), log.lastTerm(),
-            config().voters().stream().map(Member::id).sorted().toList());
+            config().voters().stream().map(Member::id).sorted().toList(), transfer);
         persistState();
         sync(() -> requestVotes(request, electionTerm));
     }
@@ -761,7 +842,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private long electionTimeout() {
         long base = properties.getElectionTimeout().toMillis();
         int rank = 0;
-        for (Member member : config().voters()) if (member.olderThan(self)) rank++;
+        if (group > 0) {
+            List<Member> voters = config().voters().stream().sorted(Comparator.comparing(Member::id)).toList();
+            int mine = 0;
+            for (int i = 0; i < voters.size(); i++) if (voters.get(i).id().equals(self.id())) mine = i;
+            rank = Math.floorMod(mine - (group - 1), Math.max(1, voters.size()));
+        } else for (Member member : config().voters()) if (member.olderThan(self)) rank++;
         long timeout = base + rank * base / 4 + random.nextLong(base / 2 + 1);
         return twoNode() && rank > 0 && !witnessed() ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
     }
@@ -837,7 +923,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         stepDown(newTerm);
         master = winner;
         lastMasterContact = timers.now();
-        meters.counter("dzdcache.two-node.reconciled").increment();
+        counter("dzdcache.two-node.reconciled").increment();
         LOG.warn("{} yields to {}, whose log is longer; {} entries from the time it acted alone are discarded and it continues from index {}",
             self.id(), winner.id(), discarded, log.lastIndex());
     }
@@ -875,6 +961,61 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             leaseUntil = Math.max(leaseUntil, sentAt + lease.millis());
             changedCurrency();
         }, error -> leaseInFlight = false);
+    }
+
+    private void followControl() {
+        Config target = control.committedConfig;
+        Config current = config();
+        if (target == null || target.joint() || current.joint() || changeInFlight || !changes.isEmpty() || transferringTo != null) return;
+        Set<String> wanted = new HashSet<>();
+        for (Member member : target.members()) wanted.add(member.id());
+        Set<String> leaving = new HashSet<>();
+        for (Member member : current.members()) if (!wanted.contains(member.id())) leaving.add(member.id());
+        if (leaving.isEmpty() && target.size() == current.size()) return;
+        LOG.info("{} brings group {} to the cluster's size {}{}", self.id(), group, target.size(), leaving.isEmpty() ? "" : ", removing " + new TreeSet<>(leaving));
+        changeMembership(list -> list.stream().filter(member -> !leaving.contains(member.id())).toList(), target.size()).exceptionally(error -> null);
+    }
+
+    private void transferLeadership(long now) {
+        if (changeInFlight || !changes.isEmpty() || config().joint()) return;
+        Member target = preferred();
+        if (target.id().equals(self.id())) return;
+        Progress p = progress.get(target.id());
+        if (p == null || !inSync.contains(target.id()) || p.matchIndex < log.lastIndex() || now - p.lastAck > properties.getHeartbeatInterval().toMillis() * 2)
+            return;
+        nextTransfer = now + properties.getElectionTimeout().toMillis() * 5;
+        transferringTo = target;
+        transferUntil = now + properties.getElectionTimeout().toMillis();
+        continueTransfer(now);
+    }
+
+    private void continueTransfer(long now) {
+        if (now >= transferUntil) { transferringTo = null; return; }
+        if (!pending.isEmpty() || changeInFlight || !changes.isEmpty()) return;
+        Member target = transferringTo;
+        Progress p = progress.get(target.id());
+        if (p == null || p.matchIndex < log.lastIndex()) { replicate(target, p == null ? new Progress(log.lastIndex() + 1, now) : p); return; }
+        LOG.info("{} hands group {} over to {}, its preferred master", self.id(), group, target.id());
+        send(target.url(), new Message.TakeOver(term, self), reply -> { }, error -> { });
+        transferUntil = Math.min(transferUntil, now + properties.getElectionTimeout().toMillis());
+    }
+
+    private void handOverTo(List<Member> remaining) {
+        Member target = null;
+        for (Member member : remaining.stream().sorted(Comparator.comparing(Member::id)).toList()) {
+            Progress p = progress.get(member.id());
+            if (p != null && inSync.contains(member.id()) && (target == null || p.matchIndex > progress.get(target.id()).matchIndex)) target = member;
+        }
+        if (target != null) send(target.url(), new Message.TakeOver(term, self), reply -> { }, error -> { });
+    }
+
+    private Message onTakeOver(Message.TakeOver request) {
+        boolean fromMaster = master != null && master.id().equals(request.master().id());
+        if (role != Role.FOLLOWER || request.term() != term || !fromMaster || !installed || !members.contains(self)
+                || !config().includes(self))
+            return new Message.Refused(409, "Not taking over");
+        startElection(timers.now(), true);
+        return new Message.Ack();
     }
 
     private Message onLeaseRequest(Message.LeaseRequest request) {
@@ -924,6 +1065,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void stepDown(long newTerm, boolean restartTimer) {
         if (newTerm > term) { term = newTerm; votedFor = null; }
+        transferringTo = null;
         boolean led = role == Role.MASTER || role == Role.CANDIDATE;
         masterLeaseUntil = Long.MIN_VALUE / 2;
         reachable = Double.NaN;
@@ -970,7 +1112,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         reachable = 1 + progress.values().stream().filter(p -> now - p.lastAck < properties.getElectionTimeout().toMillis()).count();
         long last = log.lastIndex();
         lag.register(config().voters().stream().filter(member -> !member.id().equals(self.id()) && progress.containsKey(member.id()))
-            .map(member -> MultiGauge.Row.of(Tags.of("member", member.id()), last - progress.get(member.id()).matchIndex)).toList(), true);
+            .map(member -> MultiGauge.Row.of(groupTags.and("member", member.id()), last - progress.get(member.id()).matchIndex)).toList(), true);
         if (!config().reached(contacted)) {
             LOG.warn("{} lost contact with a quorum and steps down", self.id());
             stepDown(term);
@@ -978,8 +1120,11 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         }
         if (now >= nextSweep) {
             nextSweep = now + properties.getSyncInterval().toMillis();
-            appendLocal(new LogEntry.Sweep()).exceptionally(error -> null);
+            if (wholeEngine() || group > 0) appendLocal(new LogEntry.Sweep()).exceptionally(error -> null);
         }
+        if (group > 0) followControl();
+        if (transferringTo != null) continueTransfer(now);
+        else if (group > 0 && now >= nextTransfer && now - leadershipStartedAt >= properties.getElectionTimeout().toMillis() * 3) transferLeadership(now);
         if (now >= nextProbe) { nextProbe = now + properties.getMemberTimeout().toMillis(); probeOtherClusters(); }
         if (snapshot != null && now - snapshot.createdAt() > SNAPSHOT_REUSE * 2) snapshot = null;
         compact();
@@ -1042,7 +1187,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
         }, error -> {
             p.inFlight = false;
-            meters.counter("dzdcache.replication.failures", "kind", "append").increment();
+            counter("dzdcache.replication.failures", "kind", "append").increment();
         });
     }
 
@@ -1095,6 +1240,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private void applyCommitted() {
         while (appliedIndex < commitIndex && appliedIndex + 1 <= log.lastIndex()) {
             LogEntry entry = log.get(appliedIndex + 1);
+            if (group > 0 && controlIndexOf(entry) > control.appliedIndex()) break;
             if (twoNode() && role == Role.MASTER && entry.index() > sharedIndex && !holder.engine().recordingUndo()) {
                 holder.engine().beginUndo();
                 undoFrom = sharedIndex;
@@ -1111,6 +1257,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         }
         acknowledge();
         changedCurrency();
+        for (RaftGroup data : dataGroups) data.wake();
     }
 
     private Result apply(LogEntry entry) {
@@ -1134,7 +1281,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 yield new Result(null, outcomes);
             }
             case LogEntry.Accesses accesses -> { engine.touch(accesses.accesses()); yield Result.EMPTY; }
-            case LogEntry.Sweep ignored -> { engine.sweep(entry.at()); yield Result.EMPTY; }
+            case LogEntry.Sweep ignored -> { engine.sweep(entry.at(), wholeEngine() ? -1 : partition()); yield Result.EMPTY; }
             case LogEntry.Membership membership -> {
                 Config next = Config.of(membership);
                 if (role == Role.MASTER && !next.joint() && !next.includes(self)) {
@@ -1142,8 +1289,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                     results.remove(entry.index());
                     writeTimes.remove(entry.index());
                     if (change != null) change.complete(new Result(null, List.of(Outcome.applied(null))));
+                    handOverTo(next.members());
                 }
                 applyMembership(next.voters());
+                committedConfig = next;
                 yield new Result(null, List.of(Outcome.applied(null)));
             }
             case LogEntry.Noop ignored -> Result.EMPTY;
@@ -1212,6 +1361,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         Set<String> ids = new HashSet<>();
         for (Member member : current.members()) ids.add(member.id());
         String invalid = size < 1 ? "The size must be at least 1"
+            : size == 2 && partitions > 1 ? "A cluster with partitions cannot have two nodes; the two-node rules apply to one log"
             : !ids.containsAll(leaving) ? "Only members can leave; the members are " + new TreeSet<>(ids)
             : ids.size() - leaving.size() > size ? (ids.size() - leaving.size()) + " members would remain in a cluster of " + size
                 + "; name the members that leave"
@@ -1236,6 +1386,9 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private CompletableFuture<Message> onJoin(Message.Join join) {
         if (role != Role.MASTER) return CompletableFuture.completedFuture(new Message.Refused(503, "Not the master"));
         Member joining = join.member();
+        Config cluster = group > 0 ? control.committedConfig : null;
+        if (group > 0 && (cluster == null || cluster.members().stream().noneMatch(member -> member.id().equals(joining.id()))))
+            return CompletableFuture.completedFuture(new Message.Refused(503, joining.id() + " is not a member of the cluster yet"));
         Config current = config();
         Optional<Member> existing = current.members().stream().filter(member -> member.id().equals(joining.id())).findFirst();
         if (existing.isPresent() && existing.get().equals(joining)) return CompletableFuture.completedFuture(new Message.Ack());
@@ -1285,7 +1438,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         lastMasterContact = now;
         syncedWithMaster = request.inSync();
         clusterId = request.clusterId();
-        electionDeadline = request.members().contains(sender.id()) ? now + electionTimeout() : now;
+        electionDeadline = now + electionTimeout();
         if (install != null || persistingInstall) return refusal(false, true);
         if (resyncRequired) return refusal(true, false);
         long previous = request.previousIndex();
@@ -1316,6 +1469,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             applyCommitted();
         }
         compact();
+        if (configs.lastEntry() != null && configs.lastKey() <= commitIndex && config().voters().stream().noneMatch(voter -> voter.id().equals(sender.id())))
+            electionDeadline = now;
         return new Message.Appended(term, true, match, log.lastIndex(), false, false, false, memberIds(), appliedIndex);
     }
 
@@ -1326,11 +1481,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private Message onVote(Message.Vote request) {
         long now = timers.now();
         if (role == Role.STARTING) return substituteVote(request, now);
-        boolean member = members.contains(request.candidate()) || config().includes(request.candidate());
+        boolean member = !installed || configs.isEmpty() || members.contains(request.candidate()) || config().includes(request.candidate());
         if (request.term() < term) return new Message.Voted(term, false, member, clusterId);
         long minimum = properties.getElectionTimeout().toMillis();
-        if (role == Role.FOLLOWER && master != null && now - lastMasterContact < minimum) return new Message.Voted(term, false, member, clusterId);
-        if (role == Role.MASTER && hasQuorumContact(now)) return new Message.Voted(term, false, member, clusterId);
+        if (!request.transfer() && role == Role.FOLLOWER && master != null && now - lastMasterContact < minimum)
+            return new Message.Voted(term, false, member, clusterId);
+        if (!request.transfer() && role == Role.MASTER && hasQuorumContact(now)) return new Message.Voted(term, false, member, clusterId);
         if (request.term() > term) stepDown(request.term(), false);
         boolean complete = request.lastTerm() > log.lastTerm()
             || (request.lastTerm() == log.lastTerm() && request.lastIndex() >= log.lastIndex());
@@ -1367,7 +1523,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         long now = timers.now();
         if (snapshot == null || now - snapshot.createdAt() > SNAPSHOT_REUSE)
             snapshot = new Snapshot(UUID.randomUUID().toString(), appliedIndex, log.term(appliedIndex), members, appliedConfig(),
-                holder.engine().capture(), now);
+                scopeCapture(holder.engine()), now);
         Snapshot offered = snapshot;
         p.inFlight = true;
         long sentTerm = term;
@@ -1398,9 +1554,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         clusterId = offer.clusterId();
         electionDeadline = now + electionTimeout();
         if (install != null && install.offer().snapshotId().equals(offer.snapshotId())) return new Message.Ack();
-        CacheEngine fresh = holder.fresh();
-        for (TypeDescriptor schema : offer.schemas()) fresh.publish(schema);
-        Install next = new Install(offer, fresh);
+        Install next = new Install(offer, installTarget(offer.schemas()));
         install = next;
         fetch(next, 0);
         return new Message.Ack();
@@ -1417,7 +1571,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private void finishInstall(Install target) {
-        holder.replace(target.engine());
+        installed(target.engine());
         log.reset(target.offer().index(), target.offer().indexTerm());
         configs.clear();
         configs.put(target.offer().index(), new Config(List.copyOf(target.offer().members()), target.offer().clusterSize(),
@@ -1425,13 +1579,14 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         commitIndex = target.offer().index();
         appliedIndex = target.offer().index();
         members = List.copyOf(target.offer().members());
+        committedConfig = configs.get(target.offer().index());
         installed = true;
         resyncRequired = false;
         install = null;
         failPending();
-        persistSnapshot(target.engine().capture(), target.offer().index(), target.offer().indexTerm(), () -> persistingInstall = false);
+        persistSnapshot(scopeCapture(target.engine()), target.offer().index(), target.offer().indexTerm(), () -> persistingInstall = false);
         persistingInstall = storage.durable();
-        meters.counter("dzdcache.snapshots.installed").increment();
+        counter("dzdcache.snapshots.installed").increment();
         refreshGauges();
         LOG.info("{} installed a snapshot at index {}", self.id(), target.offer().index());
     }
@@ -1451,15 +1606,16 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private void flushAccesses() {
-        List<Access> drained = new ArrayList<>(holder.engine().drainAccesses());
+        if (!wholeEngine() && group == 0) return;
+        List<Access> drained = new ArrayList<>(holder.engine().drainAccesses(wholeEngine() ? -1 : partition()));
         if (role == Role.MASTER) {
             drained.addAll(reported);
             reported.clear();
             for (int start = 0; start < drained.size(); start += ACCESSES_PER_ENTRY) {
                 List<Access> chunk = List.copyOf(drained.subList(start, Math.min(drained.size(), start + ACCESSES_PER_ENTRY)));
-                appendLocal(new LogEntry.Accesses(chunk)).exceptionally(error -> null);
+                appendLocal(new LogEntry.Accesses(chunk, controlIndex())).exceptionally(error -> null);
             }
-            if (!drained.isEmpty()) meters.counter("dzdcache.accesses").increment(drained.size());
+            if (!drained.isEmpty()) counter("dzdcache.accesses").increment(drained.size());
             return;
         }
         Member current = master;
@@ -1467,7 +1623,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         for (int start = 0; start < drained.size(); start += ACCESSES_PER_ENTRY) {
             List<Access> chunk = List.copyOf(drained.subList(start, Math.min(drained.size(), start + ACCESSES_PER_ENTRY)));
             send(current.url(), new Message.AccessReport(chunk), reply -> { },
-                error -> meters.counter("dzdcache.replication.failures", "kind", "access").increment());
+                error -> counter("dzdcache.replication.failures", "kind", "access").increment());
         }
     }
 
@@ -1499,7 +1655,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         if (storage.durable() && !snapshotting && !persistingInstall && journalBytes > storage.snapshotBytes() && appliedIndex > log.baseIndex()
                 && !holder.engine().recordingUndo()) {
             snapshotting = true;
-            persistSnapshot(holder.engine().capture(), appliedIndex, log.term(appliedIndex), () -> snapshotting = false);
+            persistSnapshot(scopeCapture(holder.engine()), appliedIndex, log.term(appliedIndex), () -> snapshotting = false);
         }
         log.compact(appliedIndex, properties.getLogRetentionBytes());
         Long base = configs.floorKey(log.baseIndex());
@@ -1689,11 +1845,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         long baseIndex = base == null ? 0 : base.index();
         if (recovered.snapshot() != null) {
             Storage.SnapshotHeader header = recovered.snapshot().header();
-            CacheEngine engine = holder.fresh();
-            for (TypeDescriptor schema : header.schemas()) engine.publish(schema);
+            CacheEngine engine = installTarget(header.schemas());
             try { recovered.snapshot().records(engine::restore); }
             catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
-            holder.replace(engine);
+            installed(engine);
             configs.put(baseIndex, new Config(List.copyOf(header.members()), header.size(),
                 header.previousMembers() == null ? null : List.copyOf(header.previousMembers()), header.previousSize()));
             members = List.copyOf(header.members());
@@ -1718,6 +1873,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         installed = true;
         commitIndex = Math.min(log.lastIndex(), Math.max(baseIndex, state == null ? 0 : state.commitIndex()));
         persistedCommit = commitIndex;
+        if (configs.floorEntry(baseIndex) != null) committedConfig = configs.floorEntry(baseIndex).getValue();
         applyCommitted();
         refreshGauges();
         if (!members.contains(self)) { restartMembership(timers.now()); return; }
@@ -1729,6 +1885,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private void refreshGauges() {
+        if (entries == null) return;
         List<SchemaStats> stats = holder.engine().stats();
         entries.register(stats.stream().map(s -> MultiGauge.Row.of(schemaTags(s), holder,
             h -> h.engine().contains(s.specification(), s.schemaVersion()) ? h.engine().entryCount(s.specification(), s.schemaVersion()) : 0)).toList(), true);

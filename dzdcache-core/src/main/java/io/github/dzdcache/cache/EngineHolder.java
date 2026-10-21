@@ -11,7 +11,18 @@ public final class EngineHolder {
         this.engine = factory.get();
     }
 
+    private volatile int partitions = 1;
+
+    public void partitions(int count) {
+        partitions = count;
+        engine.partitions(count);
+    }
+
     public CacheEngine engine() { return engine; }
-    public CacheEngine fresh() { return factory.get(); }
+    public CacheEngine fresh() {
+        CacheEngine created = factory.get();
+        created.partitions(partitions);
+        return created;
+    }
     public void replace(CacheEngine next) { engine = next; }
 }
