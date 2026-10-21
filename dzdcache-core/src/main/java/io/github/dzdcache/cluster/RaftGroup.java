@@ -1326,7 +1326,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private Message onVote(Message.Vote request) {
         long now = timers.now();
         if (role == Role.STARTING) return substituteVote(request, now);
-        boolean member = members.contains(request.candidate()) || config().includes(request.candidate());
+        boolean member = !installed || configs.isEmpty() || members.contains(request.candidate()) || config().includes(request.candidate());
         if (request.term() < term) return new Message.Voted(term, false, member, clusterId);
         long minimum = properties.getElectionTimeout().toMillis();
         if (role == Role.FOLLOWER && master != null && now - lastMasterContact < minimum) return new Message.Voted(term, false, member, clusterId);

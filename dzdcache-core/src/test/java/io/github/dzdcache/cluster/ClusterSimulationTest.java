@@ -798,6 +798,20 @@ class ClusterSimulationTest {
         assertThat(c.coordinator.ready()).isFalse();
     }
 
+    @Test void aNodeThatHasNotCaughtUpDoesNotTellAMemberItIsOutsideTheCluster() {
+        SimulatedCluster cluster = new SimulatedCluster(18);
+        started(cluster, "a", "b", "c");
+        SimulatedCluster.Node a = master(cluster);
+        cluster.crash("c");
+        SimulatedCluster.Node c = cluster.start("c");
+        Message.Appended refused = (Message.Appended) cluster.await(c.coordinator.handle(new Message.Append(a.coordinator.term(), a.coordinator.self(),
+            50, a.coordinator.term(), List.of(), 50, List.of("a", "b", "c"), false, a.coordinator.clusterId(), 50)), 1_000);
+        assertThat(refused.success()).as("the node has not caught up").isFalse();
+        Message.Voted voted = (Message.Voted) cluster.await(c.coordinator.handle(new Message.Vote(a.coordinator.term() + 1, a.coordinator.self(),
+            100, a.coordinator.term(), List.of("a", "b", "c"))), 1_000);
+        assertThat(voted.candidateIsMember()).as("a node without an applied configuration cannot judge membership").isTrue();
+    }
+
     @Test void aSecondNodeWithAnIdAlreadyInUseDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(16);
         started(cluster, "a", "b", "c");
