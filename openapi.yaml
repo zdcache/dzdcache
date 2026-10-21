@@ -207,6 +207,22 @@ paths:
                 type: array
                 items: {type: object, additionalProperties: true}
         default: {$ref: '#/components/responses/Error'}
+  /cache/changes:
+    get:
+      operationId: streamChanges
+      description: 'Server-Sent Events of what this node applies: PUT (with the value), INVALIDATED, EVICTED, EVICTED_LRU and EXPIRED, in log order and at the same positions on every node, so a client can resume on another node. The event id is the position; send it back as Last-Event-ID or from to resume after it. RESET means the node cannot continue from that position, because it is older than dzdcache.changes-buffer or the node replaced its data; read the state again.'
+      parameters:
+        - {name: specification, in: query, required: false, schema: {type: string}}
+        - {name: schemaVersion, in: query, required: false, schema: {type: integer, minimum: 1}}
+        - {name: from, in: query, required: false, description: Resume after this position; Last-Event-ID takes precedence, schema: {type: string, pattern: '^[0-9]+--?[0-9]+$'}}
+        - {name: Last-Event-ID, in: header, required: false, schema: {type: string}}
+      responses:
+        '200':
+          description: 'An endless stream; each event has id <position>, event <kind> and JSON data with position, kind, specification, schemaVersion, identity, revision, value for PUT, and at, the log time in epoch milliseconds'
+          content:
+            text/event-stream:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Error'}
   /cache/entries/invalidate:
     post:
       operationId: invalidateEntry

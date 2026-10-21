@@ -12,6 +12,7 @@
 - `dzdcache.cluster-transport: http2` sends cluster traffic over HTTP/2 on the application's own servlet web server (Tomcat in the server), for networks where only HTTP gets through. The default stays the framed TCP transport, which was about twice as fast in Docker.
 - `dzdcache.max-staleness` lets a node that cannot confirm it is current answer from its own copy instead of 503, labelled as stale with its age, and stay ready while it does. The default, 0, keeps reads fresh or refused.
 - Searches can be narrowed in the cache: the server's search takes a `filter` (conditions on any path, combined with `all`, `any` and `not`), `count`, `countBy` and `scan`, and the starter's `ClusterCache` takes a predicate and has `count`, `countBy` and `scan`. A scan is capped by `dzdcache.max-scan`.
+- A change stream: `GET /cache/changes` in the server (Server-Sent Events, resumable with `Last-Event-ID`) and `ClusterCache.onChange` in the starter report puts, invalidations, evictions and expiries in log order, at the same positions on every node.
 - Metrics for each step of a write: `dzdcache.write.duration`, `dzdcache.write.stage`, `dzdcache.cluster.round-trip`, `dzdcache.cluster.handled`, `dzdcache.cluster.loop.delay`, and with persistence `dzdcache.storage.fsync`, `dzdcache.storage.batch` and `dzdcache.storage.bytes`.
 
 ### Changed

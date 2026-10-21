@@ -11,7 +11,18 @@ public final class EngineHolder {
         this.engine = factory.get();
     }
 
+    private volatile Change.Sink sink;
+
+    public void changes(Change.Sink sink) {
+        this.sink = sink;
+        engine.changes(sink);
+    }
+
     public CacheEngine engine() { return engine; }
-    public CacheEngine fresh() { return factory.get(); }
+    public CacheEngine fresh() {
+        CacheEngine created = factory.get();
+        created.changes(sink);
+        return created;
+    }
     public void replace(CacheEngine next) { engine = next; }
 }

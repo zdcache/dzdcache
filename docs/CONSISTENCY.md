@@ -25,6 +25,8 @@ Leases use each node's monotonic clock; they need clock rates to agree within a 
 
 **Stale reads by choice.** With `dzdcache.max-staleness` above 0, a node that cannot confirm it is current answers from its own copy instead of 503, as long as it was last current at most that long ago, and labels the answer as stale with its age. Such an answer can miss acknowledged writes. A fresh answer keeps every guarantee above; a node that has never been current, or is joining, still answers 503.
 
+**Change stream.** Every node reports what it applies, in log order, with each change at the position of its log entry: puts with their value, invalidations, evictions by request and by the LRU, and expiries. Members apply the same log, so they report the same changes at the same positions, and a subscriber can continue on another node from its last position. A node that has replaced its data, from a snapshot or after rejoining, reports `RESET` instead, and so does a position older than the node keeps.
+
 ## Owner revisions
 
 Each `(specification, schemaVersion, identity)` has a positive, monotonically increasing revision allocated by the **data owner**. Prefer a database version or durable per-entity event sequence. Revisions must order cache mutations, including invalidations; a node-local counter or wall clock alone is insufficient for concurrent owners.

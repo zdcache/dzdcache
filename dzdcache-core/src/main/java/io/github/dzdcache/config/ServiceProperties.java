@@ -10,6 +10,7 @@ public class ServiceProperties {
     private int replicationPageBytes = 1024 * 1024;
     private int maxSearchResults = 10_000;
     private int maxScan = 100_000;
+    private int changesBuffer = 100_000;
     private Duration revisionRetention = Duration.ofHours(24);
     private Duration accessFlushInterval = Duration.ofSeconds(1);
     private Duration heartbeatInterval = Duration.ofMillis(200);
@@ -51,6 +52,7 @@ public class ServiceProperties {
             throw new IllegalArgumentException("revision-retention must be at least one millisecond");
         if (maxSearchResults < 1) throw new IllegalArgumentException("max-search-results must be positive");
         if (maxScan < 1) throw new IllegalArgumentException("max-scan must be positive");
+        if (changesBuffer < 1) throw new IllegalArgumentException("changes-buffer must be positive");
         if (replicationPageBytes < 1 || (long) replicationPageBytes + maxRequestBytes > maxSnapshotBytes)
             throw new IllegalArgumentException("replication-page-bytes plus max-request-bytes must fit within max-snapshot-bytes");
         if (replicationTimeout == null || replicationTimeout.toMillis() < 1 || syncInterval == null || syncInterval.toMillis() < 1)
@@ -63,6 +65,7 @@ public class ServiceProperties {
     public String getClusterTransport() { return clusterTransport; } public void setClusterTransport(String v) { clusterTransport = v; }
     public Duration getMaxStaleness() { return maxStaleness; } public void setMaxStaleness(Duration v) { maxStaleness = v; }
     public int getMaxScan() { return maxScan; } public void setMaxScan(int v) { maxScan = v; }
+    public int getChangesBuffer() { return changesBuffer; } public void setChangesBuffer(int v) { changesBuffer = v; }
     public int getMaxSchemas() { return maxSchemas; } public void setMaxSchemas(int v) { maxSchemas = v; }
     public int getMaxRevisionsPerSchema() { return maxRevisionsPerSchema; } public void setMaxRevisionsPerSchema(int v) { maxRevisionsPerSchema = v; }
     public int getMaxRequestBytes() { return maxRequestBytes; } public void setMaxRequestBytes(int v) { maxRequestBytes = v; }

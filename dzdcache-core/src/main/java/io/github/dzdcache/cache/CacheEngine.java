@@ -37,6 +37,7 @@ public final class CacheEngine {
     private volatile boolean undoOverflowed;
     private final Set<Key> created = ConcurrentHashMap.newKeySet();
     private volatile int maxScan = 100_000;
+    private volatile Change.Sink sink;
 
     public CacheEngine(RootTypeFactory factory, ObjectMapper mapper, int maxSchemas, int maxRevisions) {
         this(factory, mapper, maxSchemas, maxRevisions, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_RETENTION, Clock.systemUTC());
@@ -53,6 +54,8 @@ public final class CacheEngine {
         this.factory = factory; this.mapper = mapper; this.maxSchemas = maxSchemas; this.maxRevisions = maxRevisions;
         this.maxSearchResults = maxSearchResults; this.retention = retention.toMillis(); this.clock = clock;
     }
+
+    public void changes(Change.Sink sink) { this.sink = sink; }
 
     public void maxScan(int roots) {
         if (roots < 1) throw new IllegalArgumentException("max-scan must be positive");
@@ -253,11 +256,12 @@ public final class CacheEngine {
                 long usedAt = previous == null ? 0 : previous.usedAt;
                 switch (mutation.operation()) {
                     case EVICT -> {
-                        if (previous != null && previous.revision == mutation.revision()) bucket.release(previous);
+                        if (previous != null && previous.revision == mutation.revision()) bucket.release(previous, Change.Kind.EVICTED, at);
                     }
                     case INVALIDATE -> {
                         bucket.remove(id);
                         bucket.replace(new Revision(id, mutation.revision(), next.digest, State.DELETED, null, recordedAt, usedAt, false));
+                        bucket.emit(Change.Kind.INVALIDATED, id, mutation.revision(), null, at);
                     }
                     case PUT -> {
                         boolean live = mutation.expiresAt() == null || mutation.expiresAt() > at;
@@ -269,11 +273,13 @@ public final class CacheEngine {
                         } else bucket.remove(id);
                         bucket.replace(new Revision(id, mutation.revision(), next.digest, State.VALUE, mutation.expiresAt(),
                             recordedAt, Math.max(usedAt, used), live));
+                        if (live) bucket.emit(Change.Kind.PUT, id, mutation.revision(), next.canonical, at);
+                        else if (previous != null && previous.held) bucket.emit(Change.Kind.EXPIRED, id, mutation.revision(), null, at);
                     }
                 }
             }
             if (used > 0) bucket.touch(id, used);
-            bucket.evictOverflow();
+            bucket.evictOverflow(at);
             return mutation;
         }
     }
@@ -519,7 +525,7 @@ public final class CacheEngine {
     private static final Comparator<Revision> LEAST_RECENTLY_USED = Comparator.<Revision>comparingLong(Revision::usedAt)
         .thenComparing(revision -> revision.id.getClass().getName())
         .thenComparing(revision -> (Comparable<Object>) revision.id);
-    private record Prepared(Object id, Object root, Digest digest) {}
+    private record Prepared(Object id, Object root, Digest digest, JsonNode canonical) {}
 
     private final class Bucket {
         final TypeDescriptor descriptor;
@@ -584,7 +590,7 @@ public final class CacheEngine {
             while (!deadlines.isEmpty() && deadlines.peek().at <= now) {
                 Deadline due = deadlines.poll();
                 Revision current = revisions.get(due.id);
-                if (current != null && current.revision == due.revision && current.state == State.VALUE) release(current);
+                if (current != null && current.revision == due.revision && current.state == State.VALUE) release(current, Change.Kind.EXPIRED, now);
             }
             var records = revisions.entrySet().iterator();
             while (records.hasNext()) {
@@ -618,6 +624,15 @@ public final class CacheEngine {
             if (previous != null && previous.held) held.remove(previous);
             if (next.held) held.add(next);
         }
+        void emit(Change.Kind kind, Object id, long revision, JsonNode value, long at) {
+            Change.Sink target = sink;
+            if (target != null) target.changed(new Change(descriptor.name(), descriptor.version(), type.writeIdentity(id), revision, kind, value, at));
+        }
+        void release(Revision revision, Change.Kind kind, long at) {
+            boolean visible = revision.held;
+            release(revision);
+            if (visible) emit(kind, revision.id, revision.revision, null, at);
+        }
         void release(Revision revision) {
             remove(revision.id);
             if (revision.held) replace(revision.held(false));
@@ -629,8 +644,8 @@ public final class CacheEngine {
         boolean ranksIn(Revision candidate) {
             return held.size() < descriptor.capacity() || LEAST_RECENTLY_USED.compare(candidate, held.first()) > 0;
         }
-        void evictOverflow() {
-            while (held.size() > descriptor.capacity()) release(held.first());
+        void evictOverflow(long at) {
+            while (held.size() > descriptor.capacity()) release(held.first(), Change.Kind.EVICTED_LRU, at);
         }
         EntryMutation withRevision(EntryMutation mutation, Object id) {
             Revision previous = revisions.get(id);
@@ -644,7 +659,7 @@ public final class CacheEngine {
             Revision previous = revisions.get(id);
             if (previous == null && revisions.size() >= maxRevisions)
                 throw new CacheException(429, "Revision metadata limit reached; publish a new schema version to start a new namespace");
-            if (mutation.operation() == EntryMutation.Operation.EVICT) return new Prepared(id, null, null);
+            if (mutation.operation() == EntryMutation.Operation.EVICT) return new Prepared(id, null, null, null);
             if (previous != null && previous.revision > mutation.revision()) return null;
             boolean sameRevision = previous != null && previous.revision == mutation.revision();
             Object root = null;
@@ -663,7 +678,7 @@ public final class CacheEngine {
                     && ranksIn(previous.used(Math.max(previous.usedAt, used)));
                 if (!refill) return null;
             }
-            return new Prepared(id, root, fingerprint);
+            return new Prepared(id, root, fingerprint, canonical);
         }
     }
 }

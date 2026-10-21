@@ -4,6 +4,8 @@ import io.github.dzdcache.cache.CacheException;
 import io.github.dzdcache.cache.EngineHolder;
 import io.github.dzdcache.cache.EntryMutation;
 import io.github.dzdcache.cache.PutRequest;
+import io.github.dzdcache.cache.Change;
+import io.github.dzdcache.cluster.ChangeHub;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.zdcache.Getter;
 import io.github.zdcache.internal.Getters;
@@ -12,6 +14,7 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import tools.jackson.databind.ObjectMapper;
@@ -77,6 +80,21 @@ public final class ClusterCache<T, ID> {
     private Predicate<Object> typed(Predicate<? super T> filter) {
         Class<T> javaClass = type.javaClass();
         return root -> filter.test(javaClass.cast(root));
+    }
+
+    public record Changed<T, ID>(String position, Change.Kind kind, ID identity, long revision, T value, long at) { }
+
+    public ChangeHub.Subscription onChange(Consumer<Changed<T, ID>> listener) { return onChange(null, listener); }
+
+    public ChangeHub.Subscription onChange(String from, Consumer<Changed<T, ID>> listener) {
+        return cluster.changes().subscribe(from == null ? null : ChangeHub.Position.parse(from),
+            change -> type.name().equals(change.specification()) && type.version() == change.schemaVersion(),
+            event -> {
+                Change change = event.change();
+                ID identity = change.identity() == null ? null : values.treeToValue(change.identity(), type.identityType());
+                T value = change.value() == null ? null : values.treeToValue(change.value(), type.javaClass());
+                listener.accept(new Changed<>(event.position().toString(), change.kind(), identity, change.revision(), value, change.at()));
+            });
     }
 
     public long put(T value) { return put(value, 0); }

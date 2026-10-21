@@ -794,6 +794,51 @@ class ClusterSimulationTest {
             refused -> assertThat(refused.getMessage()).contains("joining"));
     }
 
+    private static List<String> stream(SimulatedCluster.Node node) {
+        return node.coordinator.changes().recent().stream().filter(event -> event.change().kind() != io.github.dzdcache.cache.Change.Kind.RESET)
+            .map(event -> event.position() + " " + event.change().kind() + " " + event.change().identity() + "@" + event.change().revision()).toList();
+    }
+
+    @Test void everyNodeEmitsTheSameChangesAtTheSamePositions() {
+        SimulatedCluster cluster = new SimulatedCluster(30);
+        cluster.properties.setSyncInterval(java.time.Duration.ofMillis(300));
+        TypeDescriptor students = cluster.students(5);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        Random random = new Random(30);
+        for (int step = 0; step < 80; step++) {
+            SimulatedCluster.Node via = cluster.live().get(random.nextInt(3));
+            long id = random.nextInt(12);
+            int what = random.nextInt(10);
+            if (what < 6) via.coordinator.putAsync(List.of(put(cluster, id, "N", step + 1)));
+            else if (what < 8 && via.engine().contains("students", 1)) via.engine().find("students", 1, id);
+            else via.coordinator.changeAsync(new io.github.dzdcache.cache.EntryMutation(io.github.dzdcache.cache.EntryMutation.Operation.INVALIDATE,
+                "students", 1, cluster.mapper.valueToTree(id), null, step + 1, null));
+            cluster.run(random.nextInt(40));
+        }
+        assertIdentical(cluster);
+        List<String> expected = stream(a);
+        assertThat(expected).anyMatch(line -> line.contains("EVICTED_LRU")).anyMatch(line -> line.contains(" PUT ")).anyMatch(line -> line.contains("INVALIDATED"));
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(stream(node)).as("changes on " + node.id).isEqualTo(expected);
+        ChangeHub.Position middle = a.coordinator.changes().recent().get(expected.size() / 2).position();
+        List<String> resumed = cluster.nodes.get("c").coordinator.changes().recent().stream().filter(event -> event.position().compareTo(middle) > 0)
+            .map(event -> event.position() + " " + event.change().kind() + " " + event.change().identity() + "@" + event.change().revision()).toList();
+        assertThat(resumed).as("resuming on another node continues without a gap").isEqualTo(expected.subList(expected.size() / 2 + 1, expected.size()));
+    }
+
+    @Test void aSnapshotInstallTellsSubscribersToStartOver() {
+        SimulatedCluster cluster = new SimulatedCluster(31);
+        TypeDescriptor students = cluster.students(1_000);
+        cluster.properties.setLogRetentionBytes(2_000);
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        for (long id = 1; id <= 50; id++) cluster.await(a.coordinator.putAsync(List.of(put(cluster, id, "N" + id, 1))), 5_000);
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(c.coordinator::current, 20_000)).isTrue();
+        assertThat(c.coordinator.changes().recent()).anyMatch(event -> event.change().kind() == io.github.dzdcache.cache.Change.Kind.RESET);
+    }
+
     @Test void aDeposedMasterStopsServingBeforeTheNewMasterAcknowledgesAnything() {
         SimulatedCluster cluster = new SimulatedCluster(14);
         TypeDescriptor students = cluster.students(1_000);

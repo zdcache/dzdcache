@@ -30,6 +30,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     private final RaftGroup control;
 
     private final Storage storage;
+    private final ChangeHub changes;
 
     public ClusterCoordinator(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
                               ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random,
@@ -45,6 +46,8 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
         try { recovered = storage.recover(); }
         catch (IOException e) { throw new UncheckedIOException("The cluster journal cannot be read: " + e.getMessage(), e); }
         control = new RaftGroup(0, holder, directory, transport, self, properties, meters, timers, random, mapper, storage, recovered.get(0));
+        changes = new ChangeHub(properties.getChangesBuffer(), meters);
+        control.changes(changes);
     }
 
     public void start() { control.start(); }
@@ -78,5 +81,6 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     @Override public CompletableFuture<Message> handle(Message message) { return control.handle(message); }
     public void leave() { control.leave(); }
     public void crash() { control.crash(); }
-    @Override public void close() { control.close(); storage.close(); }
+    @Override public void close() { control.close(); changes.close(); storage.close(); }
+    public ChangeHub changes() { return changes; }
 }

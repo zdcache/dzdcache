@@ -172,6 +172,24 @@ class DzdCacheStarterTest {
         } catch (InterruptedException e) { throw new AssertionError(e); }
     }
 
+    @Test void typedListenersReceiveEveryChangeInOrder() throws Exception {
+        try (ConfigurableApplicationContext node = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE)
+                .run("--logging.level.root=OFF", "--spring.main.banner-mode=off")) {
+            await(() -> node.getBean(DistributedCache.class).current());
+            ClusterCache<Student, Long> students = students(node);
+            List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+            try (var ignored = students.onChange(change -> seen.add(change.kind() + " " + change.identity()
+                    + (change.value() == null ? "" : " " + change.value().name())))) {
+                students.put(new Student(1, "Anna", "Oslo", 31));
+                students.put(new Student(2, "Bo", "Oslo", 19));
+                students.put(new Student(3, "Cy", "Oslo", 40));
+                students.invalidate(2L);
+                await(() -> seen.size() >= 5);
+            }
+            assertThat(seen).containsExactly("PUT 1 Anna", "PUT 2 Bo", "PUT 3 Cy", "EVICTED_LRU 1", "INVALIDATED 2");
+        }
+    }
+
     @Test void http2BetweenNodesNeedsAServletWebServer() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.self-url=http://localhost:7070",

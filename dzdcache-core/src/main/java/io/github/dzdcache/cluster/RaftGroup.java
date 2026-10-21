@@ -175,6 +175,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private boolean persistingInstall;
     private volatile boolean recovering;
     private volatile long freshUntil = Long.MIN_VALUE;
+    private ChangeHub hub;
+    private final List<io.github.dzdcache.cache.Change> applying = new ArrayList<>();
     private final List<Runnable> afterSync = new ArrayList<>();
 
     RaftGroup(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
@@ -213,6 +215,11 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private static long since(long nanos) { return System.nanoTime() - nanos; }
+
+    void changes(ChangeHub hub) {
+        this.hub = hub;
+        holder.changes(applying::add);
+    }
 
     public void start() {
         timers.execute(() -> {
@@ -729,6 +736,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         clusterId = null;
         holder.replace(holder.fresh());
         freshUntil = Long.MIN_VALUE;
+        if (hub != null) hub.reset(0, timers.now());
         log.reset(0, 0);
         configs.clear();
         commitIndex = 0;
@@ -859,6 +867,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             resyncRequired = true;
         } else {
             truncateFrom(keep + 1);
+            if (hub != null) hub.reset(keep, timers.now());
             commitIndex = keep;
             appliedIndex = keep;
         }
@@ -1133,7 +1142,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 undoFrom = sharedIndex;
             }
             long before = incarnation;
+            applying.clear();
             Result result = apply(entry);
+            if (hub != null && !applying.isEmpty()) hub.publish(entry.index(), List.copyOf(applying));
+            applying.clear();
             if (incarnation != before) return;
             appliedIndex = entry.index();
             if (pending.containsKey(entry.index())) {
@@ -1453,6 +1465,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void finishInstall(Install target) {
         holder.replace(target.engine());
+        if (hub != null) hub.reset(target.offer().index(), timers.now());
         log.reset(target.offer().index(), target.offer().indexTerm());
         configs.clear();
         configs.put(target.offer().index(), new Config(List.copyOf(target.offer().members()), target.offer().clusterSize(),
@@ -1729,6 +1742,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             try { recovered.snapshot().records(engine::restore); }
             catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
             holder.replace(engine);
+            if (hub != null) hub.reset(baseIndex, timers.now());
             configs.put(baseIndex, new Config(List.copyOf(header.members()), header.size(),
                 header.previousMembers() == null ? null : List.copyOf(header.previousMembers()), header.previousSize()));
             members = List.copyOf(header.members());

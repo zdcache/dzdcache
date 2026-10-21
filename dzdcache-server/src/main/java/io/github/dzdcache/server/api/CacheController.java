@@ -129,6 +129,44 @@ public class CacheController {
         meters.summary("dzdcache.search.results", "specification", request.specification()).record(count);
         return answer(ResponseEntity.ok(), read).contentType(MediaType.APPLICATION_JSON).body(body);
     }
+    @GetMapping(value = "/changes", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter changes(@RequestParam(required = false) String specification,
+            @RequestParam(required = false) Integer schemaVersion, @RequestParam(required = false) String from,
+            @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
+        cluster.requireReady();
+        if (specification != null && schemaVersion != null && !engines.engine().contains(specification, schemaVersion))
+            throw new CacheException(404, "Unknown specification or version");
+        String resume = lastEventId != null ? lastEventId : from;
+        var emitter = new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(0L);
+        io.github.dzdcache.cluster.ChangeHub.Subscription[] subscription = new io.github.dzdcache.cluster.ChangeHub.Subscription[1];
+        subscription[0] = cluster.changes().subscribe(resume == null ? null : io.github.dzdcache.cluster.ChangeHub.Position.parse(resume),
+            change -> (specification == null || specification.equals(change.specification()))
+                && (schemaVersion == null || schemaVersion == change.schemaVersion()),
+            event -> {
+                var change = event.change();
+                var data = new java.util.LinkedHashMap<String, Object>();
+                data.put("position", event.position().toString());
+                data.put("kind", change.kind().name());
+                if (change.specification() != null) {
+                    data.put("specification", change.specification());
+                    data.put("schemaVersion", change.schemaVersion());
+                    data.put("identity", change.identity());
+                    data.put("revision", change.revision());
+                }
+                if (change.value() != null) data.put("value", change.value());
+                data.put("at", change.at());
+                try {
+                    emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event().id(event.position().toString())
+                        .name(change.kind().name()).data(mapper.writeValueAsString(data), MediaType.APPLICATION_JSON));
+                } catch (java.io.IOException | IllegalStateException e) {
+                    if (subscription[0] != null) subscription[0].close();
+                }
+            });
+        emitter.onCompletion(() -> subscription[0].close());
+        emitter.onTimeout(() -> subscription[0].close());
+        emitter.onError(error -> subscription[0].close());
+        return emitter;
+    }
     @PostMapping("/entries/invalidate") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void invalidate(@RequestBody RemoveRequest request) {
         EntryMutation mutation = new EntryMutation(EntryMutation.Operation.INVALIDATE, request.specification(), request.schemaVersion(),
