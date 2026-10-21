@@ -35,6 +35,11 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
             return CacheType.of("people", 1, Long.class, specification()).capacity(capacity);
         }
         @Bean MeterRegistry meters() { return new SimpleMeterRegistry(); }
+        @Bean @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty("benchmark.disk")
+        io.github.dzdcache.cluster.Storage storage(@Value("${benchmark.disk}") String directory, io.github.dzdcache.spring.DzdCacheMapper mapper,
+                                                  MeterRegistry meters) {
+            return new io.github.dzdcache.cluster.DiskStorage(java.nio.file.Path.of(directory), 64L << 20, 64L << 20, mapper.mapper(), meters);
+        }
     }
 
     static SearchSpecification<Person, Long> specification() {
@@ -55,6 +60,7 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
                 "--dzdcache.cluster-port=" + ports[i], "--dzdcache.discovery.self-url=http://127.0.0.1:" + ports[i],
                 "--dzdcache.cluster-token=benchmark", "--dzdcache.max-search-results=1000000", "--benchmark.capacity=" + capacity,
                 "--logging.level.root=WARN", "--spring.main.banner-mode=off"));
+            if (Boolean.getBoolean("dzdcache.benchmark.persistence")) args.add("--benchmark.disk=" + disk(i));
             int peer = 0;
             for (int j = 0; j < 3; j++) if (j != i) args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://127.0.0.1:" + ports[j]);
             nodes.add(new SpringApplicationBuilder(Node.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new)));
@@ -70,13 +76,19 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
         second = cache(nodes.get(1));
     }
 
+    private static String disk(int node) {
+        try { return java.nio.file.Files.createTempDirectory("dzdcache-benchmark-node-" + node).toString(); }
+        catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+    }
+
     private static ClusterCache<Person, Long> cache(ConfigurableApplicationContext node) {
         return node.getBean(DistributedCache.class).cache(Person.class, Long.class);
     }
 
     @Override public String settings() {
-        return "3 Spring Boot starter instances in one JVM over HTTP cluster ports; exact city, prefix name, range age, "
-            + "compound city+age and exact-each tags; reads are local on instance 2 and wait for a read lease";
+        return "3 Spring Boot starter instances in one JVM over TCP cluster ports; exact city, prefix name, range age, "
+            + "compound city+age and exact-each tags; reads are local on instance 2 and wait for a read lease"
+            + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, a journal per instance on the local disk" : "");
     }
     @Override public void load(Person[] people) {
         for (int start = 0; start < people.length; start += 1_000) {

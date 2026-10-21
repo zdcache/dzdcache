@@ -126,4 +126,16 @@ every_pod_reads 22 Trondheim
 request http://127.0.0.1:18090/cache/cluster >/dev/null
 grep -q '"size":3' "$work/body" || fail "the cluster does not report size 3: $(cat "$work/body")"
 
+step "every pod deleted at once; the volumes keep the data"
+stop_forwards
+kubectl -n "$NS" delete pod dzdcache-0 dzdcache-1 dzdcache-2 --grace-period=0 --force >/dev/null 2>&1
+sleep 5
+ready 300s || fail "the StatefulSet did not come back after every pod was deleted"
+forward_pods
+every_pod_reads 7 Oslo
+every_pod_reads 21 Bergen
+every_pod_reads 22 Trondheim
+put 23 Stavanger 18091
+every_pod_reads 23 Stavanger
+
 echo "PASS: kind cluster $CLUSTER"

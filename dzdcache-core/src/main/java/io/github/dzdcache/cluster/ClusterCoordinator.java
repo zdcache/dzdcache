@@ -8,7 +8,10 @@ import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.dzdcache.config.ServiceProperties;
 import io.github.dzdcache.discovery.PeerDirectory;
 import io.micrometer.core.instrument.MeterRegistry;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.random.RandomGenerator;
@@ -23,10 +26,22 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
 
     private final RaftGroup control;
 
+    private final Storage storage;
+
     public ClusterCoordinator(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
                               ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random,
                               ObjectMapper mapper) {
-        control = new RaftGroup(holder, directory, transport, self, properties, meters, timers, random, mapper);
+        this(holder, directory, transport, self, properties, meters, timers, random, mapper, Storage.none());
+    }
+
+    public ClusterCoordinator(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
+                              ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random,
+                              ObjectMapper mapper, Storage storage) {
+        this.storage = storage;
+        Map<Integer, Storage.Recovery> recovered;
+        try { recovered = storage.recover(); }
+        catch (IOException e) { throw new UncheckedIOException("The cluster journal cannot be read: " + e.getMessage(), e); }
+        control = new RaftGroup(0, holder, directory, transport, self, properties, meters, timers, random, mapper, storage, recovered.get(0));
     }
 
     public void start() { control.start(); }
@@ -58,5 +73,5 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     @Override public CompletableFuture<Message> handle(Message message) { return control.handle(message); }
     public void leave() { control.leave(); }
     public void crash() { control.crash(); }
-    @Override public void close() { control.close(); }
+    @Override public void close() { control.close(); storage.close(); }
 }

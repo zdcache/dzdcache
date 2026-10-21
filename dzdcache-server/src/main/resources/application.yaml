@@ -18,6 +18,8 @@ management:
       group:
         readiness:
           include: readinessState,cluster
+        liveness:
+          include: livenessState,storage
 dzdcache:
   max-schemas: 100
   max-revisions-per-schema: 100000
@@ -27,3 +29,6 @@ dzdcache:
   cluster-token: ${DZDCACHE_CLUSTER_TOKEN:}
   discovery:
     mode: ${DZDCACHE_DISCOVERY_MODE:standalone}
+  persistence:
+    enabled: ${DZDCACHE_PERSISTENCE_ENABLED:false}
+    directory: ${DZDCACHE_PERSISTENCE_DIRECTORY:/var/lib/dzdcache}

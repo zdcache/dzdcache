@@ -5,3 +5,5 @@ build/
 .DS_Store
 *.log
 .env
+target/
+.mvn-cache/

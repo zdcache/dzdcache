@@ -185,12 +185,18 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.cluster-tls.bundle` | required when enabled; a `spring.ssl.bundle.*` name |
 | `dzdcache.cluster-tls.client-auth` | `none`; `need` requires trusted client certificates (mTLS) |
 | `dzdcache.cluster-tls.verify-hostname` | `true`; certificates then need IP SANs for pod IPs |
+| `dzdcache.persistence.enabled` | `false`; `DZDCACHE_PERSISTENCE_ENABLED`; keeps the log, term and vote on disk |
+| `dzdcache.persistence.directory` | `/var/lib/dzdcache`; `DZDCACHE_PERSISTENCE_DIRECTORY` |
+| `dzdcache.persistence.segment-bytes` | 64 MiB; size of one journal file |
+| `dzdcache.persistence.snapshot-bytes` | 64 MiB; journal growth after which a snapshot is written and older journal files are deleted |
 
 Each node holds a full replica, and every node evicts the same roots: a root's last use is the latest of its writes and its gets by identity on any node, members report the gets they served to the master every `access-flush-interval`, the master logs them, and each node keeps the `capacity` most recently used roots, with identity order breaking ties. Searches do not count as use. Nodes agree once they have applied the same log entries. Capacity counts roots, not bytes. Revision fences/tombstones survive value eviction and are bounded separately; new identities are rejected at that bound rather than forgetting ordering protection. Tombstones are dropped once `revision-retention` has passed since their log entry, expired entries once it has passed since their deadline, and records of evicted roots once it has passed since their last use. A mutation older than a dropped record is accepted, so publishers must not deliver or retry mutations later than the retention. There is no schema deletion yet. Use deliberate version rollover and owner repopulation when needed; old namespaces still count toward the schema limit until restart.
 
 A member that falls behind catches up from the master's log, which keeps up to `log-retention-bytes`, or installs a snapshot sent in pages of about `replication-page-bytes`. Every node holds a full replica, so this implementation is intended for modest cache sizes and node counts. Eviction listeners and durable schema/fence storage are follow-up work.
 
-Nothing is persisted to disk. A surviving peer can refill a restarted node. If all nodes restart, the owner must republish schemas and roots; collection results are authoritative empty arrays once their schema is published until roots are loaded. Infinite TTL does not provide durability.
+Without persistence nothing is written to disk. A surviving peer can refill a restarted node. If all nodes restart, the owner must republish schemas and roots; collection results are authoritative empty arrays once their schema is published until roots are loaded. Infinite TTL does not provide durability.
+
+With `dzdcache.persistence.enabled`, each node keeps its log, term and vote in a journal under `dzdcache.persistence.directory`, and a write is acknowledged only once it is on the disks of a majority. Writes arriving together share one fsync. A restarted node keeps its slot and catches up from where its disk ends, and a cluster whose nodes all restart comes back with its schemas and data. A torn last journal record is cut off at startup; damage elsewhere stops the node, and its liveness probe then fails. In Kubernetes each pod gets its own volume (`volumeClaimTemplates` in `k8s/dzdcache.yaml`).
 
 ## Source layout
 

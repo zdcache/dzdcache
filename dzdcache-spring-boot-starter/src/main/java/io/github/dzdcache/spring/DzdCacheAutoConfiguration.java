@@ -108,7 +108,8 @@ public class DzdCacheAutoConfiguration {
 
     @Bean @ConditionalOnMissingBean
     ClusterCoordinator dzdcacheCluster(EngineHolder engines, PeerDirectory directory, RaftTransport transport, DiscoveryProperties discovery,
-                                       ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper) {
+                                       ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper,
+                                       ObjectProvider<Storage> storage) {
         properties.setClusterSize(clusterSize(discovery, properties.getClusterSize()));
         if (properties.getWitnessUrl() != null) {
             if (properties.getClusterSize() != 2) throw new IllegalArgumentException("dzdcache.witness-url is only for a cluster of two nodes");
@@ -116,7 +117,7 @@ public class DzdCacheAutoConfiguration {
         }
         Member self = new Member(discovery.getNodeId(), discovery.advertisedUrl(), System.currentTimeMillis());
         return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
-            new SerialTimers(), new java.security.SecureRandom(), mapper.mapper());
+            new SerialTimers(), new java.security.SecureRandom(), mapper.mapper(), storage.getIfAvailable(Storage::none));
     }
 
     static int clusterSize(DiscoveryProperties discovery, int configured) {

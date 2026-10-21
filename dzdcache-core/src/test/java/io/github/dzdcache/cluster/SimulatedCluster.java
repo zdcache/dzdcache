@@ -37,6 +37,10 @@ final class SimulatedCluster {
     private final Map<String, Integer> groups = new HashMap<>();
     private final Set<String> cuts = new HashSet<>();
     final Map<String, Witness> witnesses = new HashMap<>();
+    static volatile boolean persistentByDefault;
+    boolean persistent = persistentByDefault;
+    long snapshotBytes = 4_000;
+    final Map<String, SimulatedDisk> disks = new HashMap<>();
     private long now = 1_000_000;
     private long sequence;
 
@@ -82,9 +86,10 @@ final class SimulatedCluster {
                 for (String other : addresses) if (!other.equals(id)) peers.put(other, URI.create("http://" + other + ":8080"));
                 return new Membership(peers, 1, true);
             };
+            Storage storage = persistent ? disk(id) : Storage.none();
             this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
                 new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), properties, meters, timers,
-                new SplittableRandom(random.nextLong()), mapper);
+                new SplittableRandom(random.nextLong()), mapper, storage);
         }
         CacheEngine engine() { return holder.engine(); }
     }
@@ -134,6 +139,14 @@ final class SimulatedCluster {
         Node node = nodes.get(id);
         node.alive = false;
         node.coordinator.crash();
+        SimulatedDisk disk = disks.get(id);
+        if (disk != null) disk.crash();
+    }
+
+    SimulatedDisk disk(String id) {
+        SimulatedDisk disk = disks.computeIfAbsent(id, ignored -> new SimulatedDisk((delay, task) -> at(delay, task), new Random(random.nextLong()), snapshotBytes));
+        disk.time(now);
+        return disk;
     }
 
     Node restart(String id) { crash(id); return start(id); }
@@ -211,6 +224,7 @@ final class SimulatedCluster {
     private void step() {
         Event event = events.poll();
         now = Math.max(now, event.at());
+        for (SimulatedDisk disk : disks.values()) disk.time(now);
         event.task().run();
         for (Node node : nodes.values()) {
             if (!node.alive || node.coordinator.role() != ClusterCoordinator.Role.MASTER) continue;

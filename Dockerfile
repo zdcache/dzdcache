@@ -13,6 +13,7 @@ RUN ./gradlew --no-daemon :dzdcache-server:bootJar
 FROM eclipse-temurin:21-jdk-jammy
 WORKDIR /app
 COPY --from=build /workspace/dzdcache-server/build/libs/dzdcache-server.jar /app/dzdcache.jar
+RUN mkdir -p /var/lib/dzdcache && chown 10001:10001 /var/lib/dzdcache
 USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=70", "-jar", "/app/dzdcache.jar"]

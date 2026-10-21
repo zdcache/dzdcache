@@ -108,6 +108,8 @@ spec:
               value: kubernetes
             - name: DZDCACHE_DISCOVERY_SERVICE_NAME
               value: dzdcache-peers
+            - name: DZDCACHE_PERSISTENCE_ENABLED
+              value: "true"
             - name: DZDCACHE_API_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -150,7 +152,17 @@ spec:
           volumeMounts:
             - name: temporary
               mountPath: /tmp
+            - name: data
+              mountPath: /var/lib/dzdcache
       volumes:
         - name: temporary
           emptyDir:
             sizeLimit: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

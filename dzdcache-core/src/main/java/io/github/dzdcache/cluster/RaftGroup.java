@@ -157,9 +157,34 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private long incarnation;
     private Install install;
     private Snapshot snapshot;
+    private final Storage storage;
+    private final int group;
+    private final Storage.Recovery recovery;
+    private long durableIndex;
+    private long journalled;
+    private long durableSequence;
+    private long truncations;
+    private long persistedTerm = -1;
+    private String persistedVote;
+    private Member persistedSelf;
+    private String persistedCluster;
+    private long persistedCommit;
+    private long journalBytes;
+    private boolean syncScheduled;
+    private boolean snapshotting;
+    private boolean persistingInstall;
+    private volatile boolean recovering;
+    private final List<Runnable> afterSync = new ArrayList<>();
 
     RaftGroup(EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
               ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random, ObjectMapper mapper) {
+        this(0, holder, directory, transport, self, properties, meters, timers, random, mapper, Storage.none(), null);
+    }
+
+    RaftGroup(int group, EngineHolder holder, PeerDirectory directory, RaftTransport transport, Member self,
+              ServiceProperties properties, MeterRegistry meters, Timers timers, RandomGenerator random, ObjectMapper mapper,
+              Storage storage, Storage.Recovery recovery) {
+        this.group = group; this.storage = storage; this.recovery = recovery;
         this.holder = holder; this.directory = directory; this.transport = transport; this.self = self;
         this.properties = properties; this.meters = meters; this.timers = timers; this.random = random; this.mapper = mapper;
         Gauge.builder("dzdcache.ready", this, coordinator -> coordinator.ready() ? 1 : 0).register(meters);
@@ -190,6 +215,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     public void start() {
         timers.execute(() -> {
+            if (recovery != null && !recovery.empty()) recover(recovery);
             long now = timers.now();
             nextDiscovery = now;
             nextFlush = now + properties.getAccessFlushInterval().toMillis();
@@ -197,7 +223,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         });
     }
 
-    public boolean ready() { return installed && role != Role.STARTING && members.contains(self) && config().includes(self); }
+    public boolean ready() { return installed && !recovering && role != Role.STARTING && members.contains(self) && config().includes(self); }
     public Role role() { return role; }
     public long term() { return term; }
     public Member self() { return self; }
@@ -287,9 +313,9 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     @Override public CompletableFuture<Message> handle(Message message) {
         long arrived = System.nanoTime();
         CompletableFuture<Message> answer = onLoop(() -> switch (message) {
-            case Message.Append append -> CompletableFuture.completedFuture(onAppend(append));
-            case Message.Vote vote -> CompletableFuture.completedFuture(onVote(vote));
-            case Message.SnapshotOffer offer -> CompletableFuture.completedFuture(onSnapshotOffer(offer));
+            case Message.Append append -> durably(onAppend(append));
+            case Message.Vote vote -> durably(onVote(vote));
+            case Message.SnapshotOffer offer -> durably(onSnapshotOffer(offer));
             case Message.SnapshotPageRequest request -> CompletableFuture.completedFuture(onSnapshotPage(request));
             case Message.WhoLeads ignored -> CompletableFuture.completedFuture(
                 new Message.Leader(self, role != Role.STARTING && members.contains(self), role == Role.STARTING ? null : master(), members,
@@ -525,6 +551,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         LogEntry draft = new LogEntry(log.lastIndex() + 1, term, timers.now(), payload);
         LogEntry entry = draft.withBytes(size(draft));
         log.append(entry, entry.bytes());
+        journal(new Storage.Entry(entry));
+        journalBytes += entry.bytes();
         adopt(entry);
         CompletableFuture<Result> future = new CompletableFuture<>();
         pending.put(entry.index(), future);
@@ -536,6 +564,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 future.completeExceptionally(new CacheException(503, "Write may be partially applied; retry the same revision and payload"));
             }
         });
+        sync(() -> { });
         advanceCommit();
         replicateAll();
         return future;
@@ -545,6 +574,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void tick() {
         if (closed) return;
+        if (storage.failure() != null) { storageFailed(storage.failure()); return; }
         long now = timers.now();
         switch (role) {
             case STARTING -> { if (now >= nextDiscovery) discover(now); }
@@ -677,6 +707,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         leaseUntil = Long.MIN_VALUE / 2;
         leaseIndex = Long.MAX_VALUE;
         failPending();
+        rebase(0, 0, null, () -> { });
         nextDiscovery = now;
         LOG.info("No longer a member; rejoining as {}", self);
     }
@@ -691,7 +722,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         meters.counter("dzdcache.elections").increment();
         if (elected()) { becomeMaster(now); return; }
         long electionTerm = term;
-        if (witnessed()) claimWitness(electionTerm, granted -> {
+        if (witnessed() && !recovering) claimWitness(electionTerm, granted -> {
             if (granted && role == Role.CANDIDATE && term == electionTerm) {
                 votes.add("witness");
                 if (elected()) becomeMaster(timers.now());
@@ -699,6 +730,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         });
         Message.Vote request = new Message.Vote(electionTerm, self, log.lastIndex(), log.lastTerm(),
             config().voters().stream().map(Member::id).sorted().toList());
+        persistState();
+        sync(() -> requestVotes(request, electionTerm));
+    }
+
+    private void requestVotes(Message.Vote request, long electionTerm) {
+        if (role != Role.CANDIDATE || term != electionTerm) return;
         for (Member member : config().voters()) {
             if (member.id().equals(self.id())) continue;
             send(member.url(), request, reply -> {
@@ -738,6 +775,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         leases.clear();
         ackedIndex = 0;
         role = Role.MASTER;
+        recovering = false;
         syncedWithMaster = true;
         master = self;
         leadershipStartedAt = now;
@@ -787,8 +825,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             engine.endUndo();
             resyncRequired = true;
         } else {
-            log.truncateFrom(keep + 1);
-            configs.tailMap(keep + 1, true).clear();
+            truncateFrom(keep + 1);
             commitIndex = keep;
             appliedIndex = keep;
         }
@@ -1042,7 +1079,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void advanceCommit() {
         if (role != Role.MASTER || !config().reached(inSync)) return;
-        long candidate = log.lastIndex();
+        long candidate = storage.durable() ? durableIndex : log.lastIndex();
         for (String id : inSync) {
             if (id.equals(self.id()) || departing.containsKey(id)) continue;
             Progress p = progress.get(id);
@@ -1098,7 +1135,17 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
             case LogEntry.Accesses accesses -> { engine.touch(accesses.accesses()); yield Result.EMPTY; }
             case LogEntry.Sweep ignored -> { engine.sweep(entry.at()); yield Result.EMPTY; }
-            case LogEntry.Membership membership -> { applyMembership(Config.of(membership).voters()); yield new Result(null, List.of(Outcome.applied(null))); }
+            case LogEntry.Membership membership -> {
+                Config next = Config.of(membership);
+                if (role == Role.MASTER && !next.joint() && !next.includes(self)) {
+                    CompletableFuture<Result> change = pending.remove(entry.index());
+                    results.remove(entry.index());
+                    writeTimes.remove(entry.index());
+                    if (change != null) change.complete(new Result(null, List.of(Outcome.applied(null))));
+                }
+                applyMembership(next.voters());
+                yield new Result(null, List.of(Outcome.applied(null)));
+            }
             case LogEntry.Noop ignored -> Result.EMPTY;
         };
     }
@@ -1239,14 +1286,13 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         syncedWithMaster = request.inSync();
         clusterId = request.clusterId();
         electionDeadline = request.members().contains(sender.id()) ? now + electionTimeout() : now;
-        if (install != null) return refusal(false, true);
+        if (install != null || persistingInstall) return refusal(false, true);
         if (resyncRequired) return refusal(true, false);
         long previous = request.previousIndex();
         if (previous > log.lastIndex() || previous < log.baseIndex()) return refusal(false, false);
         if (log.term(previous) != request.previousTerm()) {
             if (previous <= commitIndex) { resyncRequired = true; return refusal(true, false); }
-            log.truncateFrom(previous);
-            configs.tailMap(previous, true).clear();
+            truncateFrom(previous);
             sharedIndex = Math.min(sharedIndex, log.lastIndex());
             return new Message.Appended(term, false, 0, previous - 1, false, false, false, memberIds(), appliedIndex);
         }
@@ -1254,13 +1300,15 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             if (entry.index() <= log.lastIndex()) {
                 if (log.term(entry.index()) == entry.term()) continue;
                 if (entry.index() <= commitIndex) { resyncRequired = true; return refusal(true, false); }
-                log.truncateFrom(entry.index());
-                configs.tailMap(entry.index(), true).clear();
+                truncateFrom(entry.index());
             }
             log.append(entry, entry.bytes());
+            journal(new Storage.Entry(entry));
+            journalBytes += entry.bytes();
             adopt(entry);
         }
         installed = true;
+        recovering = false;
         long match = previous + request.entries().size();
         sharedIndex = match;
         if (request.commitIndex() > commitIndex) {
@@ -1381,6 +1429,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         resyncRequired = false;
         install = null;
         failPending();
+        persistSnapshot(target.engine().capture(), target.offer().index(), target.offer().indexTerm(), () -> persistingInstall = false);
+        persistingInstall = storage.durable();
         meters.counter("dzdcache.snapshots.installed").increment();
         refreshGauges();
         LOG.info("{} installed a snapshot at index {}", self.id(), target.offer().index());
@@ -1446,6 +1496,11 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private void compact() {
+        if (storage.durable() && !snapshotting && !persistingInstall && journalBytes > storage.snapshotBytes() && appliedIndex > log.baseIndex()
+                && !holder.engine().recordingUndo()) {
+            snapshotting = true;
+            persistSnapshot(holder.engine().capture(), appliedIndex, log.term(appliedIndex), () -> snapshotting = false);
+        }
         log.compact(appliedIndex, properties.getLogRetentionBytes());
         Long base = configs.floorKey(log.baseIndex());
         if (base != null) configs.headMap(base, false).clear();
@@ -1499,6 +1554,178 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private boolean isMember(String id) {
         for (Member member : members) if (member.id().equals(id)) return true;
         return false;
+    }
+
+    private void journal(Storage.Record record) {
+        if (!storage.durable()) return;
+        storage.append(group, record);
+        journalled++;
+    }
+
+    private void persistState() {
+        if (!storage.durable()) return;
+        if (self != persistedSelf || !Objects.equals(clusterId, persistedCluster)) {
+            persistedSelf = self;
+            persistedCluster = clusterId;
+            journal(new Storage.Self(self, clusterId));
+        }
+        if (term != persistedTerm || !Objects.equals(votedFor, persistedVote)) {
+            persistedTerm = term;
+            persistedVote = votedFor;
+            persistedCommit = commitIndex;
+            journal(new Storage.HardState(term, votedFor, commitIndex));
+        } else if (commitIndex > persistedCommit) {
+            persistedCommit = commitIndex;
+            storage.append(group, new Storage.HardState(term, votedFor, commitIndex));
+        }
+    }
+
+    private void sync(Runnable after) {
+        if (!storage.durable()) { after.run(); return; }
+        afterSync.add(after);
+        if (syncScheduled) return;
+        syncScheduled = true;
+        timers.execute(this::syncNow);
+    }
+
+    private void syncNow() {
+        syncScheduled = false;
+        if (closed) return;
+        persistState();
+        List<Runnable> waiting = List.copyOf(afterSync);
+        afterSync.clear();
+        long sequence = journalled;
+        long index = log.lastIndex();
+        long epoch = truncations;
+        storage.flush(() -> timers.execute(() -> {
+            if (closed) return;
+            durableSequence = Math.max(durableSequence, sequence);
+            if (epoch == truncations) durableIndex = Math.max(durableIndex, Math.min(index, log.lastIndex()));
+            advanceCommit();
+            for (Runnable done : waiting) done.run();
+        }));
+    }
+
+    private CompletableFuture<Message> durably(Message reply) {
+        persistState();
+        if (!storage.durable() || durableSequence >= journalled) return CompletableFuture.completedFuture(reply);
+        CompletableFuture<Message> answer = new CompletableFuture<>();
+        sync(() -> answer.complete(reply instanceof Message.Appended appended && appended.term() != term
+            ? new Message.Appended(term, appended.success(), appended.matchIndex(), appended.lastIndex(), appended.snapshotNeeded(),
+                appended.installing(), appended.mustYield(), appended.members(), appendedIndex(appended))
+            : reply));
+        return answer;
+    }
+
+    private long appendedIndex(Message.Appended appended) { return Math.max(appended.appliedIndex(), appliedIndex); }
+
+    private void truncateFrom(long index) {
+        log.truncateFrom(index);
+        configs.tailMap(index, true).clear();
+        journal(new Storage.Truncate(index));
+        truncations++;
+        durableIndex = Math.min(durableIndex, log.lastIndex());
+    }
+
+    private void persistSnapshot(CacheEngine.Capture capture, long index, long indexTerm, Runnable done) {
+        if (!storage.durable()) { done.run(); return; }
+        Config config = configs.floorEntry(index) == null ? config() : configs.floorEntry(index).getValue();
+        Storage.SnapshotHeader header = new Storage.SnapshotHeader(index, indexTerm, config.members(), config.size(),
+            config.previousMembers(), config.previousSize(), clusterId, capture.descriptors());
+        long started = incarnation;
+        storage.writeSnapshot(group, header, capture, name -> timers.execute(() -> {
+            if (incarnation != started || closed) { done.run(); return; }
+            rebase(index, indexTerm, name, done);
+        }), failure -> timers.execute(() -> { done.run(); storageFailed(failure); }));
+    }
+
+    private void rebase(long index, long indexTerm, String snapshotName, Runnable done) {
+        if (!storage.durable()) { done.run(); return; }
+        List<Storage.Record> records = new ArrayList<>();
+        records.add(new Storage.Base(index, indexTerm, snapshotName));
+        records.add(new Storage.Self(self, clusterId));
+        records.add(new Storage.HardState(term, votedFor, Math.max(index, Math.min(commitIndex, log.lastIndex()))));
+        long retained = 0;
+        for (long i = Math.max(index + 1, log.baseIndex() + 1); i <= log.lastIndex(); i++) {
+            LogEntry entry = log.get(i);
+            records.add(new Storage.Entry(entry));
+            retained += entry.bytes();
+        }
+        persistedSelf = self;
+        persistedCluster = clusterId;
+        persistedTerm = term;
+        persistedVote = votedFor;
+        persistedCommit = Math.max(index, Math.min(commitIndex, log.lastIndex()));
+        journalBytes = retained;
+        long last = log.lastIndex();
+        long epoch = truncations;
+        journalled++;
+        long sequence = journalled;
+        storage.rebase(group, records, () -> timers.execute(() -> {
+            durableSequence = Math.max(durableSequence, sequence);
+            if (epoch == truncations) durableIndex = Math.max(durableIndex, Math.min(last, log.lastIndex()));
+            advanceCommit();
+            done.run();
+        }));
+    }
+
+    private void storageFailed(Throwable failure) {
+        if (closed) return;
+        problem("storage failed: " + failure);
+        if (role == Role.MASTER) stepDown(term);
+        closed = true;
+    }
+
+    private void recover(Storage.Recovery recovered) {
+        Storage.Self identity = recovered.self();
+        if (identity == null || !identity.member().id().equals(self.id()) || !identity.member().url().equals(self.url())) {
+            rebase(0, 0, null, () -> { });
+            LOG.info("{} starts with an empty log: its disk belongs to {}", self.id(), identity == null ? "no member" : identity.member());
+            return;
+        }
+        self = identity.member();
+        clusterId = identity.clusterId();
+        Storage.Base base = recovered.base();
+        long baseIndex = base == null ? 0 : base.index();
+        if (recovered.snapshot() != null) {
+            Storage.SnapshotHeader header = recovered.snapshot().header();
+            CacheEngine engine = holder.fresh();
+            for (TypeDescriptor schema : header.schemas()) engine.publish(schema);
+            try { recovered.snapshot().records(engine::restore); }
+            catch (java.io.IOException e) { throw new java.io.UncheckedIOException(e); }
+            holder.replace(engine);
+            configs.put(baseIndex, new Config(List.copyOf(header.members()), header.size(),
+                header.previousMembers() == null ? null : List.copyOf(header.previousMembers()), header.previousSize()));
+            members = List.copyOf(header.members());
+            for (Member member : members) if (!member.id().equals(self.id())) knownPeers.add(member.url());
+        }
+        log.reset(baseIndex, base == null ? 0 : base.term());
+        commitIndex = baseIndex;
+        appliedIndex = baseIndex;
+        for (LogEntry entry : recovered.entries()) {
+            log.append(entry, entry.bytes());
+            adopt(entry);
+            journalBytes += entry.bytes();
+        }
+        durableIndex = log.lastIndex();
+        Storage.HardState state = recovered.hardState();
+        if (state != null) { term = state.term(); votedFor = state.votedFor(); }
+        term = Math.max(term, log.lastTerm());
+        persistedSelf = self;
+        persistedCluster = clusterId;
+        persistedTerm = term;
+        persistedVote = votedFor;
+        installed = true;
+        commitIndex = Math.min(log.lastIndex(), Math.max(baseIndex, state == null ? 0 : state.commitIndex()));
+        persistedCommit = commitIndex;
+        applyCommitted();
+        refreshGauges();
+        if (!members.contains(self)) { restartMembership(timers.now()); return; }
+        role = Role.FOLLOWER;
+        recovering = true;
+        lastMasterContact = timers.now();
+        electionDeadline = timers.now() + electionTimeout();
+        LOG.info("{} recovered term {} and log {}..{} (committed {}) from disk", self.id(), term, log.baseIndex(), log.lastIndex(), commitIndex);
     }
 
     private void refreshGauges() {
