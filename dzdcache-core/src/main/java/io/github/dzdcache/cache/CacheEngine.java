@@ -35,6 +35,7 @@ public final class CacheEngine {
     private final java.util.concurrent.atomic.AtomicInteger saved = new java.util.concurrent.atomic.AtomicInteger();
     private volatile boolean undoOverflowed;
     private final Set<Key> created = ConcurrentHashMap.newKeySet();
+    private volatile int partitions = 1;
 
     public CacheEngine(RootTypeFactory factory, ObjectMapper mapper, int maxSchemas, int maxRevisions) {
         this(factory, mapper, maxSchemas, maxRevisions, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_RETENTION, Clock.systemUTC());
@@ -50,6 +51,31 @@ public final class CacheEngine {
         if (retention == null || retention.toMillis() < 1) throw new IllegalArgumentException("Revision retention must be positive");
         this.factory = factory; this.mapper = mapper; this.maxSchemas = maxSchemas; this.maxRevisions = maxRevisions;
         this.maxSearchResults = maxSearchResults; this.retention = retention.toMillis(); this.clock = clock;
+    }
+
+    public void partitions(int count) {
+        if (count < 1) throw new IllegalArgumentException("There must be at least one partition");
+        if (count != partitions && !buckets.isEmpty()) throw new IllegalStateException("Partitions are fixed once a type is published");
+        partitions = count;
+    }
+
+    public int partitions() { return partitions; }
+
+    public static int partition(String specification, JsonNode identity, int count) {
+        if (count == 1) return 0;
+        int hash = (specification + "/" + identity.toString()).hashCode();
+        hash ^= hash >>> 16;
+        hash *= 0x85ebca6b;
+        hash ^= hash >>> 13;
+        hash *= 0xc2b2ae35;
+        hash ^= hash >>> 16;
+        return Math.floorMod(hash, count);
+    }
+
+    public int partition(String specification, JsonNode identity) { return partition(specification, identity, partitions); }
+
+    private static int share(int total, int count, int partition) {
+        return total / count + (partition < total % count ? 1 : 0);
     }
 
     public void register(TypeDescriptor descriptor, RootType<?> type) {
@@ -70,6 +96,8 @@ public final class CacheEngine {
         if (buckets.size() + unavailable.size() >= maxSchemas) throw new CacheException(429, "Schema limit reached");
         if (descriptor.capacity() < 1 || descriptor.capacity() > maxRevisions)
             throw new IllegalArgumentException("Schema capacity must be between 1 and max-revisions-per-schema");
+        if (descriptor.capacity() < partitions)
+            throw new IllegalArgumentException("Schema capacity must be at least the number of partitions, " + partitions);
         duration(descriptor.ttl());
         RootType<?> type = resolve(key, descriptor);
         if (type == null) {
@@ -198,10 +226,15 @@ public final class CacheEngine {
         return true;
     }
 
-    public Capture capture() {
+    public Capture capture() { return capture(-1); }
+
+    public Capture captureSchemas() { return new Capture(descriptors()); }
+
+    public Capture capture(int partition) {
         Capture capture = new Capture(descriptors());
         for (Bucket bucket : buckets.values()) synchronized (bucket) {
             for (Revision revision : bucket.revisions.values()) {
+                if (partition >= 0 && revision.partition != partition) continue;
                 capture.owners.add(bucket);
                 capture.revisions.add(revision);
                 capture.roots.add(revision.held ? bucket.cache.peek(bucket.type.javaClass(), revision.id) : null);
@@ -213,6 +246,7 @@ public final class CacheEngine {
     public void restore(SnapshotRecord record) {
         if (unavailable.containsKey(new Key(record.specification(), record.schemaVersion()))) return;
         Bucket bucket = bucket(record.specification(), record.schemaVersion());
+        int part = partition(record.specification(), record.identity());
         synchronized (bucket) {
             Object id = bucket.type.readIdentity(record.identity());
             bucket.save(id);
@@ -221,10 +255,10 @@ public final class CacheEngine {
                 Object root = bucket.type.read(record.value());
                 if (record.expiresAt() != null) bucket.expiries.put(id, record.expiresAt());
                 bucket.cache.put(root, bucket.specification);
-                if (record.expiresAt() != null) bucket.deadlines.add(new Deadline(record.expiresAt(), id, record.revision()));
+                if (record.expiresAt() != null) bucket.deadlines[part].add(new Deadline(record.expiresAt(), id, record.revision()));
             }
             bucket.replace(new Revision(id, record.revision(), Digest.parse(record.digest()), State.valueOf(record.state()),
-                record.expiresAt(), record.recordedAt(), record.usedAt(), held));
+                record.expiresAt(), record.recordedAt(), record.usedAt(), held, part));
         }
     }
 
@@ -237,9 +271,10 @@ public final class CacheEngine {
         Bucket bucket = bucket(requested.specification(), requested.schemaVersion());
         synchronized (bucket) {
             Object id = bucket.type.readIdentity(requested.identity());
+            int part = partition(requested.specification(), requested.identity());
             EntryMutation mutation = requested.revision() > 0 ? requested : bucket.withRevision(requested, id);
             if (mutation == null) return requested;
-            Prepared next = bucket.prepare(mutation, id, used);
+            Prepared next = bucket.prepare(mutation, id, used, part);
             if (next != null) {
                 bucket.save(id);
                 Revision previous = bucket.revisions.get(id);
@@ -250,7 +285,7 @@ public final class CacheEngine {
                     }
                     case INVALIDATE -> {
                         bucket.remove(id);
-                        bucket.replace(new Revision(id, mutation.revision(), next.digest, State.DELETED, null, recordedAt, usedAt, false));
+                        bucket.replace(new Revision(id, mutation.revision(), next.digest, State.DELETED, null, recordedAt, usedAt, false, part));
                     }
                     case PUT -> {
                         boolean live = mutation.expiresAt() == null || mutation.expiresAt() > at;
@@ -258,15 +293,15 @@ public final class CacheEngine {
                             if (mutation.expiresAt() != null) bucket.expiries.put(id, mutation.expiresAt());
                             else bucket.expiries.remove(id);
                             bucket.cache.put(next.root, bucket.specification);
-                            if (mutation.expiresAt() != null) bucket.deadlines.add(new Deadline(mutation.expiresAt(), id, mutation.revision()));
+                            if (mutation.expiresAt() != null) bucket.deadlines[part].add(new Deadline(mutation.expiresAt(), id, mutation.revision()));
                         } else bucket.remove(id);
                         bucket.replace(new Revision(id, mutation.revision(), next.digest, State.VALUE, mutation.expiresAt(),
-                            recordedAt, Math.max(usedAt, used), live));
+                            recordedAt, Math.max(usedAt, used), live, part));
                     }
                 }
             }
             if (used > 0) bucket.touch(id, used);
-            bucket.evictOverflow();
+            bucket.evictOverflow(part);
             return mutation;
         }
     }
@@ -276,10 +311,17 @@ public final class CacheEngine {
         bucket.accesses.merge(bucket.type.readIdentity(identity), clock.millis(), Math::max);
     }
 
-    public List<Access> drainAccesses() {
+    public List<Access> drainAccesses() { return drainAccesses(-1); }
+
+    public List<Access> drainAccesses(int partition) {
         List<Access> drained = new ArrayList<>();
         for (Bucket bucket : buckets.values()) {
             for (Object id : List.copyOf(bucket.accesses.keySet())) {
+                if (partition >= 0) {
+                    int part;
+                    synchronized (bucket) { part = bucket.partitionOf(id); }
+                    if (part != partition) continue;
+                }
                 Long at = bucket.accesses.remove(id);
                 if (at != null) drained.add(new Access(bucket.descriptor.name(), bucket.descriptor.version(), bucket.type.writeIdentity(id), at));
             }
@@ -388,8 +430,14 @@ public final class CacheEngine {
 
     public void sweep() { sweep(clock.millis()); }
 
-    public void sweep(long at) {
-        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.sweep(at); }
+    public void sweep(long at) { sweep(at, -1); }
+
+    public void sweep(long at, int partition) {
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.sweep(at, partition); }
+    }
+
+    public void clear(int partition) {
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.clear(partition); }
     }
 
     public String fingerprint(String specification, int version) {
@@ -438,9 +486,9 @@ public final class CacheEngine {
         String text() { return HexFormat.of().toHexDigits(high) + HexFormat.of().toHexDigits(low); }
     }
     private record Revision(Object id, long revision, Digest digest, State state, Long expiresAt, long recordedAt,
-                            long usedAt, boolean held) {
-        Revision used(long at) { return new Revision(id, revision, digest, state, expiresAt, recordedAt, at, held); }
-        Revision held(boolean value) { return new Revision(id, revision, digest, state, expiresAt, recordedAt, usedAt, value); }
+                            long usedAt, boolean held, int partition) {
+        Revision used(long at) { return new Revision(id, revision, digest, state, expiresAt, recordedAt, at, held, partition); }
+        Revision held(boolean value) { return new Revision(id, revision, digest, state, expiresAt, recordedAt, usedAt, value, partition); }
     }
     @SuppressWarnings("unchecked")
     private static final Comparator<Revision> LEAST_RECENTLY_USED = Comparator.<Revision>comparingLong(Revision::usedAt)
@@ -454,14 +502,20 @@ public final class CacheEngine {
         final ZDCache cache;
         final SearchSpecification<Object, Object> specification;
         final Map<Object, Revision> revisions = new HashMap<>();
-        final TreeSet<Revision> held = new TreeSet<>(LEAST_RECENTLY_USED);
+        final int parts = partitions;
+        @SuppressWarnings("unchecked") final TreeSet<Revision>[] held = new TreeSet[parts];
+        final int[] counts = new int[parts];
         final ConcurrentHashMap<Object, Long> accesses = new ConcurrentHashMap<>();
         final ConcurrentHashMap<Object, Long> expiries = new ConcurrentHashMap<>();
-        final PriorityQueue<Deadline> deadlines = new PriorityQueue<>(Comparator.comparingLong(Deadline::at));
+        @SuppressWarnings("unchecked") final PriorityQueue<Deadline>[] deadlines = new PriorityQueue[parts];
         final Map<Object, Saved> undo = new HashMap<>();
 
         Bucket(TypeDescriptor descriptor, RootType<Object> type) {
             this.descriptor = descriptor; this.type = type;
+            for (int i = 0; i < parts; i++) {
+                held[i] = new TreeSet<>(LEAST_RECENTLY_USED);
+                deadlines[i] = new PriorityQueue<>(Comparator.comparingLong(Deadline::at));
+            }
             this.cache = ZDCache.builder().defaultMaxPerType(Integer.MAX_VALUE).build();
             this.specification = type.specification();
             cache.register(specification);
@@ -488,17 +542,20 @@ public final class CacheEngine {
                 Object id = entry.getKey();
                 Saved before = entry.getValue();
                 Revision current = revisions.remove(id);
-                if (current != null && current.held) held.remove(current);
+                if (current != null) counts[current.partition]--;
+                if (current != null && current.held) held[current.partition].remove(current);
                 cache.remove(type.javaClass(), id);
                 expiries.remove(id);
                 if (before.revision() == null) continue;
                 if (before.root() != null) cache.put(before.root(), specification);
                 if (before.expiry() != null) {
                     expiries.put(id, before.expiry());
-                    if (before.revision().state == State.VALUE) deadlines.add(new Deadline(before.expiry(), id, before.revision().revision));
+                    if (before.revision().state == State.VALUE)
+                        deadlines[before.revision().partition].add(new Deadline(before.expiry(), id, before.revision().revision));
                 }
                 revisions.put(id, before.revision());
-                if (before.revision().held) held.add(before.revision());
+                counts[before.revision().partition]++;
+                if (before.revision().held) held[before.revision().partition].add(before.revision());
             }
             undo.clear();
         }
@@ -507,28 +564,54 @@ public final class CacheEngine {
             cache.remove(type.javaClass(), id);
             expiries.remove(id);
         }
-        void sweep(long now) {
-            while (!deadlines.isEmpty() && deadlines.peek().at <= now) {
-                Deadline due = deadlines.poll();
-                Revision current = revisions.get(due.id);
-                if (current != null && current.revision == due.revision && current.state == State.VALUE) release(current);
+        void sweep(long now, int partition) {
+            for (int part = 0; part < parts; part++) {
+                if (partition >= 0 && part != partition) continue;
+                PriorityQueue<Deadline> due = deadlines[part];
+                while (!due.isEmpty() && due.peek().at <= now) {
+                    Deadline next = due.poll();
+                    Revision current = revisions.get(next.id);
+                    if (current != null && current.revision == next.revision && current.state == State.VALUE) release(current);
+                }
             }
             var records = revisions.entrySet().iterator();
             while (records.hasNext()) {
                 var entry = records.next();
-                if (!retired(entry.getValue(), now)) continue;
+                Revision revision = entry.getValue();
+                if (partition >= 0 && revision.partition != partition || !retired(revision, now)) continue;
                 save(entry.getKey());
-                if (entry.getValue().held) held.remove(entry.getValue());
+                if (revision.held) held[revision.partition].remove(revision);
                 remove(entry.getKey());
                 records.remove();
+                counts[revision.partition]--;
             }
-            if (deadlines.size() > 2 * Math.max(16, revisions.size())) {
-                deadlines.clear();
+            for (int part = 0; part < parts; part++) {
+                if (partition >= 0 && part != partition || deadlines[part].size() <= 2 * Math.max(16, counts[part])) continue;
+                int rebuilt = part;
+                deadlines[part].clear();
                 revisions.forEach((id, revision) -> {
-                    if (revision.state == State.VALUE && revision.expiresAt != null)
-                        deadlines.add(new Deadline(revision.expiresAt, id, revision.revision));
+                    if (revision.partition == rebuilt && revision.state == State.VALUE && revision.expiresAt != null)
+                        deadlines[rebuilt].add(new Deadline(revision.expiresAt, id, revision.revision));
                 });
             }
+        }
+        void clear(int partition) {
+            var records = revisions.entrySet().iterator();
+            while (records.hasNext()) {
+                var entry = records.next();
+                if (entry.getValue().partition != partition) continue;
+                cache.remove(type.javaClass(), entry.getKey());
+                expiries.remove(entry.getKey());
+                accesses.remove(entry.getKey());
+                records.remove();
+            }
+            held[partition].clear();
+            deadlines[partition].clear();
+            counts[partition] = 0;
+        }
+        int partitionOf(Object id) {
+            Revision revision = revisions.get(id);
+            return revision != null ? revision.partition : partition(descriptor.name(), type.writeIdentity(id));
         }
         boolean retired(Revision revision, long now) {
             return switch (revision.state) {
@@ -537,13 +620,18 @@ public final class CacheEngine {
                     || (!revision.held && revision.usedAt + retention <= now);
             };
         }
-        int pendingDeadlines() { return deadlines.size(); }
+        int pendingDeadlines() {
+            int pending = 0;
+            for (PriorityQueue<Deadline> due : deadlines) pending += due.size();
+            return pending;
+        }
         SchemaView view() { return new SchemaView(descriptor.name(), descriptor.version(), descriptor.fingerprint(), type.javaClass().getName()); }
         void replace(Revision next) {
             save(next.id);
             Revision previous = revisions.put(next.id, next);
-            if (previous != null && previous.held) held.remove(previous);
-            if (next.held) held.add(next);
+            if (previous == null) counts[next.partition]++;
+            if (previous != null && previous.held) held[previous.partition].remove(previous);
+            if (next.held) held[next.partition].add(next);
         }
         void release(Revision revision) {
             remove(revision.id);
@@ -553,11 +641,14 @@ public final class CacheEngine {
             Revision revision = revisions.get(id);
             if (revision != null && at > revision.usedAt) replace(revision.used(at));
         }
+        int capacity(int partition) { return share(descriptor.capacity(), parts, partition); }
         boolean ranksIn(Revision candidate) {
-            return held.size() < descriptor.capacity() || LEAST_RECENTLY_USED.compare(candidate, held.first()) > 0;
+            TreeSet<Revision> kept = held[candidate.partition];
+            return kept.size() < capacity(candidate.partition) || LEAST_RECENTLY_USED.compare(candidate, kept.first()) > 0;
         }
-        void evictOverflow() {
-            while (held.size() > descriptor.capacity()) release(held.first());
+        void evictOverflow(int partition) {
+            TreeSet<Revision> kept = held[partition];
+            while (kept.size() > capacity(partition)) release(kept.first());
         }
         EntryMutation withRevision(EntryMutation mutation, Object id) {
             Revision previous = revisions.get(id);
@@ -567,9 +658,9 @@ public final class CacheEngine {
             return new EntryMutation(mutation.operation(), mutation.specification(), mutation.schemaVersion(), mutation.identity(),
                 mutation.value(), revision, mutation.expiresAt());
         }
-        Prepared prepare(EntryMutation mutation, Object id, long used) {
+        Prepared prepare(EntryMutation mutation, Object id, long used, int partition) {
             Revision previous = revisions.get(id);
-            if (previous == null && revisions.size() >= maxRevisions)
+            if (previous == null && counts[partition] >= share(maxRevisions, parts, partition))
                 throw new CacheException(429, "Revision metadata limit reached; publish a new schema version to start a new namespace");
             if (mutation.operation() == EntryMutation.Operation.EVICT) return new Prepared(id, null, null);
             if (previous != null && previous.revision > mutation.revision()) return null;
