@@ -25,7 +25,7 @@ jobs:
           cp -R site/. _site_src/
           page() {
             printf -- '---\nlayout: default\ntitle: %s\nsource: %s\n---\n{%% raw %%}\n' "$2" "$1"
-            sed -E -e "s#\]\(CHANGELOG\.md\)#](site:changelog/)#g" -e "s#\]\(docs/BENCHMARK\.md\)#](site:benchmark/)#g" \
+            sed -E -e "s#\]\(benchmark/([^)]+\.svg)\)#](site:\1)#g" -e "s#\]\(CHANGELOG\.md\)#](site:changelog/)#g" -e "s#\]\(docs/BENCHMARK\.md\)#](site:benchmark/)#g" \
               -e "s#\]\(([^)#:]+)\)#](https://github.com/${GITHUB_REPOSITORY}/blob/main/\1)#g" -e "s#\]\(site:#](#g" "$1"
             printf '\n{%% endraw %%}\n'
           }
@@ -34,6 +34,7 @@ jobs:
           if [ -f docs/BENCHMARK.md ]; then
             mkdir -p _site_src/benchmark
             page docs/BENCHMARK.md "DZDCache benchmark" > _site_src/benchmark/index.md
+            if ls docs/benchmark/*.svg >/dev/null 2>&1; then cp docs/benchmark/*.svg _site_src/benchmark/; fi
             printf 'benchmark: true\n' >> _site_src/_config.yml
           fi
       - uses: actions/configure-pages@v6
