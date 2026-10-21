@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking
+
+- Nodes talk to each other over one TCP connection per peer with length-prefixed messages instead of an HTTP request per message, and the cluster protocol is version 2. A cluster of 0.1 nodes cannot be upgraded one node at a time; a node of 0.1 that reaches a new node is told which protocol it speaks.
+
+### Added
+
+- Persistence for the server: with `dzdcache.persistence.enabled`, each node keeps its log, term and vote in a journal under `dzdcache.persistence.directory`, and a write is acknowledged once it is on the disks of a majority. Writes arriving together share one fsync, and the journal is compacted into snapshots. A restarted node keeps its slot and catches up from where its disk ends; a cluster whose nodes all restart keeps its schemas and data. `k8s/dzdcache.yaml` gives each pod a volume.
+- Metrics for each step of a write: `dzdcache.write.duration`, `dzdcache.write.stage`, `dzdcache.cluster.round-trip`, `dzdcache.cluster.handled`, `dzdcache.cluster.loop.delay`, and with persistence `dzdcache.storage.fsync`, `dzdcache.storage.batch` and `dzdcache.storage.bytes`.
+
+### Changed
+
+- Followers send concurrent writes to the master together, which raises write throughput under concurrency.
+
+### Fixed
+
+- A node that had joined but not yet caught up could tell a member that it was not part of the cluster, and the member then left; under unlucky timing a whole cluster dissolved and a new one was founded without its schemas.
+- A node whose self-url reaches another node could be made a founding member.
+- A resize that removed the current master reported 503 although it had completed, and the remaining members could start an election before the change that removed the master was committed.
+
 ## [0.1.1] - 2026-10-20
 
 ### Fixed
