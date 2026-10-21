@@ -158,4 +158,40 @@ class ClusterPersistenceTest {
         assertThat(back.coordinator.self()).isNotEqualTo(before);
         assertThat(cluster.runUntil(() -> revisions(back).equals(acknowledged), 5_000)).isTrue();
     }
+
+    @Test void aWholeClusterThatComesBackAtNewAddressesKeepsItsData() {
+        SimulatedCluster cluster = cluster(8, "a", "b", "c");
+        TypeDescriptor students = cluster.students(1_000);
+        startAll(cluster, "a", "b", "c");
+        cluster.await(master(cluster).coordinator.publishAsync(students), 5_000);
+        Map<Long, Long> acknowledged = write(cluster, 30);
+        for (String id : List.of("a", "b", "c")) cluster.crash(id);
+        for (String id : List.of("a", "b", "c")) cluster.move(id, id + "-moved");
+        startAll(cluster, "a", "b", "c");
+        for (SimulatedCluster.Node node : cluster.live()) {
+            assertThat(node.coordinator.self().url().getHost()).isEqualTo(node.id + "-moved");
+            assertThat(revisions(node)).as("data on " + node.id).isEqualTo(acknowledged);
+            assertThat(node.meters.counter("dzdcache.snapshots.installed").count()).as(node.id).isZero();
+        }
+        assertThat(master(cluster).coordinator.members()).extracting(member -> member.url().getHost())
+            .containsExactlyInAnyOrder("a-moved", "b-moved", "c-moved");
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aNodeThatComesBackAtANewAddressRejoinsWithItsLogAndCatchesUp() {
+        SimulatedCluster cluster = cluster(9, "a", "b", "c");
+        TypeDescriptor students = cluster.students(1_000);
+        startAll(cluster, "a", "b", "c");
+        cluster.await(master(cluster).coordinator.publishAsync(students), 5_000);
+        write(cluster, 10);
+        String follower = cluster.live().stream().filter(node -> node.coordinator.role() != ClusterCoordinator.Role.MASTER).findFirst().orElseThrow().id;
+        cluster.crash(follower);
+        Map<Long, Long> acknowledged = write(cluster, 20);
+        cluster.move(follower, follower + "-moved");
+        SimulatedCluster.Node back = cluster.start(follower);
+        assertThat(cluster.runUntil(back.coordinator::current, 20_000)).isTrue();
+        assertThat(back.meters.counter("dzdcache.snapshots.installed").count()).isZero();
+        assertThat(cluster.runUntil(() -> revisions(back).equals(acknowledged), 5_000)).isTrue();
+        assertThat(master(cluster).coordinator.members()).hasSize(3).extracting(member -> member.url().getHost()).contains(follower + "-moved");
+    }
 }

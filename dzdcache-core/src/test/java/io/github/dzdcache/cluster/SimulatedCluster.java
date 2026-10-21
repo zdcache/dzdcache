@@ -42,6 +42,8 @@ final class SimulatedCluster {
     long snapshotBytes = 4_000;
     final Map<String, SimulatedDisk> disks = new HashMap<>();
     final Map<String, ServiceProperties> learners = new HashMap<>();
+    private final Map<String, URI> moved = new HashMap<>();
+    private final Map<String, String> hosts = new HashMap<>();
     private long now = 1_000_000;
     private long sequence;
 
@@ -84,7 +86,7 @@ final class SimulatedCluster {
             };
             PeerDirectory directory = () -> {
                 Map<String, URI> peers = new LinkedHashMap<>();
-                for (String other : addresses) if (!other.equals(id)) peers.put(other, URI.create("http://" + other + ":8080"));
+                for (String other : addresses) if (!other.equals(id)) peers.put(other, moved.getOrDefault(other, URI.create("http://" + other + ":8080")));
                 return new Membership(peers, 1, true);
             };
             Storage storage = persistent ? disk(id) : Storage.none();
@@ -166,6 +168,13 @@ final class SimulatedCluster {
 
     Node restart(String id) { crash(id); return start(id); }
 
+    void move(String id, String host) {
+        URI url = URI.create("http://" + host + ":8080");
+        moved.put(id, url);
+        selfUrls.put(id, url);
+        hosts.put(host, id);
+    }
+
     void partition(Collection<String> side) {
         for (String id : groups.keySet()) groups.put(id, side.contains(id) ? 1 : 0);
     }
@@ -204,7 +213,7 @@ final class SimulatedCluster {
 
     private CompletableFuture<Message> deliver(Node from, URI peer, Message message) {
         CompletableFuture<Message> reply = new CompletableFuture<>();
-        String to = peer.getHost();
+        String to = hosts.getOrDefault(peer.getHost(), peer.getHost());
         byte[] wire = mapper.writeValueAsBytes(message);
         long timeout = properties.getReplicationTimeout().toMillis();
         long latency = 1 + random.nextInt(4);

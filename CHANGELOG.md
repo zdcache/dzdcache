@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- With persistence in Kubernetes, a pod that came back with a new IP address threw its disk away, so a cluster whose pods were all replaced at once lost its data. A node now keeps its log when only its address changed, and rejoins under the new one.
 - A node that had joined but not yet caught up could tell a member that it was not part of the cluster, and the member then left; under unlucky timing a whole cluster dissolved and a new one was founded without its schemas.
 - A node whose self-url reaches another node could be made a founding member.
 - A resize that removed the current master reported 503 although it had completed, and the remaining members could start an election before the change that removed the master was committed.

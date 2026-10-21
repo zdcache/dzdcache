@@ -1798,12 +1798,13 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     private void recover(Storage.Recovery recovered) {
         Storage.Self identity = recovered.self();
-        if (identity == null || !identity.member().id().equals(self.id()) || !identity.member().url().equals(self.url())) {
+        if (identity == null || !identity.member().id().equals(self.id())) {
             rebase(0, 0, null, () -> { });
             LOG.info("{} starts with an empty log: its disk belongs to {}", self.id(), identity == null ? "no member" : identity.member());
             return;
         }
-        self = identity.member();
+        boolean moved = !identity.member().url().equals(self.url());
+        if (!moved) self = identity.member();
         clusterId = identity.clusterId();
         Storage.Base base = recovered.base();
         long baseIndex = base == null ? 0 : base.index();
@@ -1833,7 +1834,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         Storage.HardState state = recovered.hardState();
         if (state != null) { term = state.term(); votedFor = state.votedFor(); }
         term = Math.max(term, log.lastTerm());
-        persistedSelf = self;
+        persistedSelf = identity.member();
         persistedCluster = clusterId;
         persistedTerm = term;
         persistedVote = votedFor;
@@ -1842,6 +1843,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         persistedCommit = commitIndex;
         applyCommitted();
         refreshGauges();
+        if (moved) {
+            persistState();
+            LOG.info("{} recovered log {}..{} (committed {}) from disk at the new address {}; it rejoins with its data",
+                self.id(), log.baseIndex(), log.lastIndex(), commitIndex, self.url());
+            return;
+        }
         if (!listed()) { restartMembership(timers.now()); return; }
         role = Role.FOLLOWER;
         recovering = true;
