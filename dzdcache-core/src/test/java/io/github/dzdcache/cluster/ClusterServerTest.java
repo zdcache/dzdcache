@@ -38,7 +38,9 @@ class ClusterServerTest {
 
     private <T extends AutoCloseable> T keep(T resource) { resources.add(resource); return resource; }
 
-    private int server() throws Exception {
+    private int server() throws Exception { return server(mapper); }
+
+    private int server(tools.jackson.databind.ObjectMapper wire) throws Exception {
         properties.setClusterToken("secret");
         properties.setMaxSnapshotBytes(4096);
         properties.setMaxRequestBytes(1024);
@@ -47,7 +49,7 @@ class ClusterServerTest {
         var coordinator = keep(new ClusterCoordinator(new EngineHolder(() -> new CacheEngine(null, mapper, 10, 100)),
             () -> new Membership(Map.of(), 1, true), (peer, message) -> null, self, properties, new SimpleMeterRegistry(),
             timers, new java.util.SplittableRandom(1), mapper));
-        var server = keep(new ClusterServer(new InetSocketAddress("127.0.0.1", 0), coordinator, mapper, properties));
+        var server = keep(new ClusterServer(new InetSocketAddress("127.0.0.1", 0), coordinator, wire, properties));
         server.start();
         return server.port();
     }
@@ -79,6 +81,27 @@ class ClusterServerTest {
         try (var transport = new TcpRaftTransport(mapper, properties)) {
             assertThat(transport.send(URI.create("http://127.0.0.1:" + port), new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
                 .isInstanceOfSatisfying(Message.Leader.class, leader -> assertThat(leader.self()).isEqualTo(self));
+        }
+    }
+
+    @Test void servesClusterMessagesEncodedAsSmile() throws Exception {
+        properties.setClusterEncoding("smile");
+        int port = server(ClusterCodec.of("smile", mapper));
+        try (var transport = new TcpRaftTransport(ClusterCodec.of("smile", mapper), properties)) {
+            assertThat(transport.send(URI.create("http://127.0.0.1:" + port), new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
+                .isInstanceOfSatisfying(Message.Leader.class, leader -> assertThat(leader.self()).isEqualTo(self));
+        }
+    }
+
+    @Test void refusesANodeThatEncodesClusterMessagesDifferently() throws Exception {
+        properties.setClusterEncoding("smile");
+        int port = server(ClusterCodec.of("smile", mapper));
+        var json = new ServiceProperties();
+        json.setClusterToken("secret");
+        try (var transport = new TcpRaftTransport(mapper, json)) {
+            assertThatThrownBy(() -> transport.send(URI.create("http://127.0.0.1:" + port), new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOf(IncompatiblePeerException.class)
+                .hasMessageContaining("encoded as smile (dzdcache.cluster-encoding); the request uses json");
         }
     }
 

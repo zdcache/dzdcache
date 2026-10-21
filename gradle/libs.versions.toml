@@ -22,6 +22,7 @@ infinispan-bom = { module = "org.infinispan:infinispan-bom", version.ref = "infi
 infinispan-core = { module = "org.infinispan:infinispan-core" }
 infinispan-query = { module = "org.infinispan:infinispan-query" }
 jackson-databind = { module = "tools.jackson.core:jackson-databind", version.ref = "jackson" }
+jackson-smile = { module = "tools.jackson.dataformat:jackson-dataformat-smile", version.ref = "jackson" }
 jedis = { module = "redis.clients:jedis", version.ref = "jedis" }
 jmh-core = { module = "org.openjdk.jmh:jmh-core", version.ref = "jmh" }
 jmh-generator = { module = "org.openjdk.jmh:jmh-generator-annprocess", version.ref = "jmh" }

@@ -55,7 +55,9 @@ public final class Http2RaftTransport implements RaftTransport, AutoCloseable {
         HttpRequest request;
         try {
             request = HttpRequest.newBuilder(endpoint).timeout(timeout)
-                .header("Authorization", "Bearer " + properties.getClusterToken()).header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + properties.getClusterToken())
+                .header("Content-Type", ClusterCodec.contentType(properties.getClusterEncoding()))
+                .header(ClusterCodec.HEADER, properties.getClusterEncoding())
                 .header(Protocol.HEADER, String.valueOf(Protocol.VERSION))
                 .POST(HttpRequest.BodyPublishers.ofByteArray(mapper.writeValueAsBytes(message))).build();
         } catch (RuntimeException e) { return CompletableFuture.failedFuture(e); }

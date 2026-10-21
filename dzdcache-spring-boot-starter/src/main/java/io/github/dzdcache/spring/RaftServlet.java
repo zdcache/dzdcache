@@ -20,7 +20,8 @@ final class RaftServlet extends HttpServlet {
         if (body.length > endpoint.maxBytes()) body = null;
         AsyncContext async = request.startAsync();
         async.setTimeout(timeoutMillis);
-        endpoint.handle(request.getMethod(), request.getHeader("Authorization"), request.getHeader(Protocol.HEADER), body).whenComplete((reply, error) -> {
+        endpoint.handle(request.getMethod(), request.getHeader("Authorization"), request.getHeader(Protocol.HEADER),
+                request.getHeader(io.github.dzdcache.cluster.ClusterCodec.HEADER), body).whenComplete((reply, error) -> {
             HttpServletResponse out = (HttpServletResponse) async.getResponse();
             try {
                 if (error != null) { out.setStatus(503); return; }

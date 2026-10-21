@@ -17,7 +17,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
@@ -89,7 +88,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
                 FrameChannel opened = new FrameChannel(socket);
                 channel = opened;
                 if (broken) { opened.close(); return; }
-                opened.writeNow(0, mapper.writeValueAsBytes(Map.of("protocol", Protocol.VERSION, "token", properties.getClusterToken())), true);
+                opened.writeNow(0, Greeting.hello(properties, "tcp"), true);
                 greet(opened);
                 socket.setSoTimeout(0);
                 opened.startWriting(queue, mapper, this::fail, () -> breakOff(new IOException("The connection to " + peer + " broke")));
@@ -108,10 +107,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
             }
             FrameChannel.Frame greeting = opened.read(FrameChannel.HELLO_LIMIT);
             if (greeting.oversized()) throw new IOException("Peer " + peer + " sent an oversized greeting");
-            JsonNode answer = mapper.readTree(greeting.body());
-            int status = answer.path("status").asInt();
-            if (status == 409) throw new IncompatiblePeerException(peer, answer.path("message").asString(""));
-            if (status != 200) throw new IllegalStateException("Peer " + peer + " refused the connection: " + answer.path("message").asString(""));
+            Greeting.requireAccepted(peer, greeting.body());
         }
 
         private void read(FrameChannel opened) throws IOException {

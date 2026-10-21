@@ -8,6 +8,7 @@ description = "Replicated ZDCache engine, elections, log and discovery, without 
 dependencies {
     api(libs.zdcache)
     api(libs.jackson.databind)
+    implementation(libs.jackson.smile)
     api(libs.micrometer.core)
     implementation(libs.slf4j.api)
     testImplementation(platform(libs.spring.boot.dependencies))

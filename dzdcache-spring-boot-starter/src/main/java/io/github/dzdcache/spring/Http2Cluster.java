@@ -37,7 +37,8 @@ class Http2Cluster {
     @Bean ServletRegistrationBean<RaftServlet> dzdcacheRaftServlet(ObjectProvider<ClusterCoordinator> cluster, ObjectProvider<Witness> witness,
                                                                    DzdCacheMapper mapper, ServiceProperties properties) {
         Witness standIn = witness.getIfAvailable();
-        RaftEndpoint endpoint = new RaftEndpoint(standIn != null ? standIn : cluster.getObject(), mapper.mapper(), properties);
+        RaftEndpoint endpoint = new RaftEndpoint(standIn != null ? standIn : cluster.getObject(),
+            io.github.dzdcache.cluster.ClusterCodec.of(properties.getClusterEncoding(), mapper.mapper()), properties);
         ServletRegistrationBean<RaftServlet> registration = new ServletRegistrationBean<>(
             new RaftServlet(endpoint, properties.getReplicationTimeout().toMillis() * 4), RaftEndpoint.PATH);
         registration.setAsyncSupported(true);

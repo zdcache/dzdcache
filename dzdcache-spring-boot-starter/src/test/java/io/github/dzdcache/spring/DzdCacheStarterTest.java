@@ -197,10 +197,23 @@ class DzdCacheStarterTest {
             .hasStackTraceContaining("dzdcache.cluster-transport is http2, but this application runs no servlet web server");
     }
 
+    @Test void webSocketsBetweenNodesNeedAServletWebServer() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=websocket", "--dzdcache.discovery.self-url=http://localhost:7070",
+                "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("dzdcache.cluster-transport is websocket, but this application runs no servlet web server with WebSocket support");
+    }
+
     @Test void anUnknownClusterTransportIsRefused() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=quic", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
-            .hasStackTraceContaining("cluster-transport must be tcp or http2");
+            .hasStackTraceContaining("cluster-transport must be tcp, http2 or websocket");
+    }
+
+    @Test void anUnknownClusterEncodingIsRefused() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
+                "--dzdcache.cluster-token=secret", "--dzdcache.cluster-encoding=avro", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("cluster-encoding must be json or smile");
     }
 
     @Test void writesResumeThroughANewMasterWhenTheMasterStops() throws Exception {

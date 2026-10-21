@@ -31,7 +31,7 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfiguration(afterName = {"org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration",
     "org.springframework.boot.autoconfigure.ssl.SslAutoConfiguration"})
 @ConditionalOnProperty(prefix = "dzdcache", name = "enabled", matchIfMissing = true)
-@org.springframework.context.annotation.Import(Http2Cluster.class)
+@org.springframework.context.annotation.Import({Http2Cluster.class, WebSocketCluster.class})
 public class DzdCacheAutoConfiguration {
     private record Typed(CacheType<?, ?> declaration, TypeDescriptor descriptor, JacksonRootType<?, ?> type) { }
 
@@ -88,16 +88,19 @@ public class DzdCacheAutoConfiguration {
     @Bean @ConditionalOnMissingBean
     RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties, DiscoveryProperties discovery,
                                     ObjectProvider<SslBundles> bundles, ObjectProvider<Http2Cluster.Marker> http2,
-                                    org.springframework.core.env.Environment environment) {
+                                    ObjectProvider<WebSocketCluster.Marker> websocket, org.springframework.core.env.Environment environment) {
         SSLContext ssl = clusterSsl(properties, discovery, bundles);
+        ObjectMapper wire = ClusterCodec.of(properties.getClusterEncoding(), mapper.mapper());
+        if (websocket.getIfAvailable() != null) return new WebSocketRaftTransport(wire, properties, ssl);
         if (http2.getIfAvailable() != null) {
             if (!environment.getProperty("server.http2.enabled", Boolean.class, false))
                 throw new IllegalStateException("dzdcache.cluster-transport is http2, but server.http2.enabled is false");
-            return new Http2RaftTransport(mapper.mapper(), properties, ssl);
+            return new Http2RaftTransport(wire, properties, ssl);
         }
-        if (properties.getClusterTransport().equals("http2") && !discovery.getMode().equals("standalone"))
-            throw new IllegalStateException("dzdcache.cluster-transport is http2, but this application runs no servlet web server");
-        return new TcpRaftTransport(mapper.mapper(), properties, ssl);
+        if (!properties.getClusterTransport().equals("tcp") && !discovery.getMode().equals("standalone"))
+            throw new IllegalStateException("dzdcache.cluster-transport is " + properties.getClusterTransport() + ", but this application runs no servlet web server"
+                + (properties.getClusterTransport().equals("websocket") ? " with WebSocket support" : ""));
+        return new TcpRaftTransport(wire, properties, ssl);
     }
 
     private static SSLContext clusterSsl(ServiceProperties properties, DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles) {
@@ -154,16 +157,17 @@ public class DzdCacheAutoConfiguration {
     @Bean @ConditionalOnMissingBean
     ClusterServer dzdcacheClusterServer(ClusterCoordinator cluster, ServiceProperties properties, DzdCacheMapper mapper,
                                         DiscoveryProperties discovery, ObjectProvider<SslBundles> bundles, ObjectProvider<Witness> witness) {
-        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), witness.getIfAvailable() != null ? witness.getIfAvailable() : cluster, mapper.mapper(), properties,
+        return new ClusterServer(new InetSocketAddress(properties.getClusterPort()), witness.getIfAvailable() != null ? witness.getIfAvailable() : cluster,
+            ClusterCodec.of(properties.getClusterEncoding(), mapper.mapper()), properties,
             clusterSsl(properties, discovery, bundles), properties.getClusterTls().needClientAuth());
     }
 
     @Bean
     DzdCacheLifecycle dzdcacheLifecycle(ClusterCoordinator cluster, ClusterServer server, DiscoveryProperties discovery,
                                         ObjectProvider<CacheType<?, ?>> declarations, ObjectProvider<ObjectMapper> values, DzdCacheMapper mapper,
-                                        ObjectProvider<Http2Cluster.Marker> http2) {
+                                        ObjectProvider<Http2Cluster.Marker> http2, ObjectProvider<WebSocketCluster.Marker> websocket) {
         List<TypeDescriptor> descriptors = typed(declarations, values.getIfUnique(mapper::mapper)).stream().map(Typed::descriptor).toList();
-        boolean clusterPort = !discovery.getMode().equals("standalone") && http2.getIfAvailable() == null;
+        boolean clusterPort = !discovery.getMode().equals("standalone") && http2.getIfAvailable() == null && websocket.getIfAvailable() == null;
         return new DzdCacheLifecycle(cluster, server, clusterPort, !discovery.getMode().equals("witness"), descriptors);
     }
 

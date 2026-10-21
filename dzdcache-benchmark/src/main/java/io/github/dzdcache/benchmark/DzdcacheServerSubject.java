@@ -46,7 +46,8 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
                     .withNetworkAliases("server-" + i).withExposedPorts(8080)
                     .withEnv("DZDCACHE_DISCOVERY_MODE", "static").withEnv("DZDCACHE_DISCOVERY_NODE_ID", "server-" + i)
                     .withEnv("DZDCACHE_DISCOVERY_SELF_URL", "http://server-" + i + ":" + peerPort)
-                    .withEnv("DZDCACHE_CLUSTER_TRANSPORT", transport)
+                    .withEnv("DZDCACHE_CLUSTER_TRANSPORT", transport).withEnv("DZDCACHE_HTTP2", String.valueOf(transport.equals("http2")))
+                    .withEnv("DZDCACHE_CLUSTER_ENCODING", System.getProperty("dzdcache.benchmark.encoding", "json"))
                     .withEnv("DZDCACHE_DISCOVERY_STATIC_PEERS", String.join(",", peers))
                     .withEnv("DZDCACHE_API_TOKEN", TOKEN).withEnv("DZDCACHE_CLUSTER_TOKEN", "benchmark-cluster")
                     .withEnv("DZDCACHE_MAX_SEARCH_RESULTS", "1000000").withEnv("LOGGING_LEVEL_ROOT", "WARN")
@@ -118,7 +119,12 @@ public final class DzdcacheServerSubject implements DistributedSubject, TimedWri
     @Override public String settings() {
         return "3 dzdcache server containers (" + image + ") on a Docker network; JSON over HTTP/1.1 from java.net.http to server 2 "
             + "through Docker's port mapping; JSON-only registration with the same dimensions; between the servers "
-            + (System.getProperty("dzdcache.benchmark.transport", "tcp").equals("tcp") ? "framed TCP on the cluster port" : "HTTP/2 on Tomcat")
+            + switch (System.getProperty("dzdcache.benchmark.transport", "tcp")) {
+                case "http2" -> "HTTP/2 on Tomcat";
+                case "websocket" -> "a WebSocket on Tomcat";
+                default -> "framed TCP on the cluster port";
+            }
+            + " carrying " + System.getProperty("dzdcache.benchmark.encoding", "json").toUpperCase(java.util.Locale.ROOT)
             + (Boolean.getBoolean("dzdcache.benchmark.persistence") ? "; persistence on, journal inside each container" : "");
     }
     @Override public void load(Person[] people) {

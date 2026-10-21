@@ -8,16 +8,13 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 public final class ClusterServer implements AutoCloseable {
@@ -75,13 +72,9 @@ public final class ClusterServer implements AutoCloseable {
             byte[] start = channel.readMagic();
             if (!FrameChannel.isMagic(start)) { refuseHttp(channel, start); return; }
             FrameChannel.Frame hello = channel.read(FrameChannel.HELLO_LIMIT);
-            String refusal = hello.oversized() ? "The greeting is too large" : refusal(hello.body());
-            if (refusal != null) {
-                int status = refusal.startsWith("This node speaks") ? 409 : 401;
-                channel.writeNow(0, mapper.writeValueAsBytes(Map.of("status", status, "message", refusal)), true);
-                return;
-            }
-            channel.writeNow(0, mapper.writeValueAsBytes(Map.of("status", 200)), true);
+            String refusal = hello.oversized() ? "The greeting is too large" : Greeting.refusal(hello.body(), properties);
+            if (refusal != null) { channel.writeNow(0, Greeting.refused(refusal), true); return; }
+            channel.writeNow(0, Greeting.accepted(), true);
             socket.setSoTimeout(0);
             LinkedBlockingQueue<FrameChannel.Outgoing> replies = new LinkedBlockingQueue<>();
             channel.startWriting(replies, mapper, (id, failure) -> replies.add(new FrameChannel.Outgoing(id,
@@ -102,18 +95,6 @@ public final class ClusterServer implements AutoCloseable {
             channels.remove(channel);
             channel.close();
         }
-    }
-
-    private String refusal(byte[] body) {
-        JsonNode hello;
-        try { hello = mapper.readTree(body); }
-        catch (RuntimeException e) { return "The greeting is not valid"; }
-        int protocol = hello.path("protocol").asInt(-1);
-        if (protocol != Protocol.VERSION) return "This node speaks cluster protocol " + Protocol.VERSION + "; the request uses " + protocol;
-        String token = hello.path("token").asString("");
-        if (!MessageDigest.isEqual(token.getBytes(StandardCharsets.UTF_8), properties.getClusterToken().getBytes(StandardCharsets.UTF_8)))
-            return "The cluster token is wrong";
-        return null;
     }
 
     private void refuseHttp(FrameChannel channel, byte[] start) throws IOException {

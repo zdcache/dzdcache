@@ -12,6 +12,8 @@ dependencies {
     compileOnly(libs.spring.boot.health)
     compileOnly(platform(libs.spring.boot.dependencies))
     compileOnly("jakarta.servlet:jakarta.servlet-api")
+    compileOnly("jakarta.websocket:jakarta.websocket-api")
+    compileOnly("jakarta.websocket:jakarta.websocket-client-api")
     testImplementation(platform(libs.spring.boot.dependencies))
     testImplementation(libs.spring.boot.health)
     testImplementation("org.springframework.boot:spring-boot-starter-test")

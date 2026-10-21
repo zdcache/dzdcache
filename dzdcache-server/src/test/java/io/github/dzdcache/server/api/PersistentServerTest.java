@@ -26,7 +26,7 @@ class PersistentServerTest {
     @TempDir Path disks;
     private String transport;
 
-    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"http2", "tcp"})
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"http2", "tcp", "websocket"})
     void aWholeClusterStoppedAtOnceStartsAgainWithItsSchemasAndData(String transport) throws Exception {
         this.transport = transport;
         int[] ports = ports(6);
@@ -58,7 +58,7 @@ class PersistentServerTest {
     }
 
     private ConfigurableApplicationContext node(int i, int[] ports) {
-        boolean http2 = transport.equals("http2");
+        boolean http2 = !transport.equals("tcp");
         List<String> args = new ArrayList<>(List.of("--server.port=" + ports[i], "--dzdcache.discovery.mode=static",
             "--dzdcache.cluster-transport=" + transport, "--server.http2.enabled=" + transport.equals("http2"), "--dzdcache.discovery.node-id=node-" + i, "--dzdcache.cluster-port=" + ports[3 + i],
             "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? ports[i] : ports[3 + i]), "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",

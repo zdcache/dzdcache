@@ -26,6 +26,10 @@ public final class RaftEndpoint {
     public int maxBytes() { return properties.getMaxSnapshotBytes(); }
 
     public CompletableFuture<Reply> handle(String method, String authorization, String protocol, byte[] body) {
+        return handle(method, authorization, protocol, "json", body);
+    }
+
+    public CompletableFuture<Reply> handle(String method, String authorization, String protocol, String encoding, byte[] body) {
         if (!"POST".equals(method)) return CompletableFuture.completedFuture(new Reply(405, null, new byte[0]));
         if (authorization == null || !MessageDigest.isEqual(authorization.getBytes(StandardCharsets.UTF_8),
                 ("Bearer " + properties.getClusterToken()).getBytes(StandardCharsets.UTF_8)))
@@ -33,13 +37,17 @@ public final class RaftEndpoint {
         if (!String.valueOf(Protocol.VERSION).equals(protocol))
             return CompletableFuture.completedFuture(Reply.text(409, "This node speaks cluster protocol " + Protocol.VERSION + " over HTTP/2; the request uses "
                 + (protocol == null ? "none" : protocol)));
+        String requested = encoding == null ? "json" : encoding;
+        if (!requested.equals(properties.getClusterEncoding()))
+            return CompletableFuture.completedFuture(Reply.text(409, "This node speaks cluster protocol " + Protocol.VERSION + " encoded as "
+                + properties.getClusterEncoding() + " (dzdcache.cluster-encoding); the request uses " + requested));
         if (body == null || body.length > properties.getMaxSnapshotBytes()) return CompletableFuture.completedFuture(new Reply(413, null, new byte[0]));
         Message request;
         try { request = mapper.readValue(body, Message.class); }
         catch (RuntimeException e) { return CompletableFuture.completedFuture(new Reply(400, null, new byte[0])); }
         return handler.handle(request)
             .completeOnTimeout(new Message.Refused(503, "Timed out"), properties.getReplicationTimeout().toMillis() * 3, TimeUnit.MILLISECONDS)
-            .handle((answer, error) -> new Reply(200, "application/json",
+            .handle((answer, error) -> new Reply(200, ClusterCodec.contentType(properties.getClusterEncoding()),
                 mapper.writeValueAsBytes(error == null ? answer : new Message.Refused(503, error.toString()))));
     }
 }

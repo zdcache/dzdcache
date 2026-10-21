@@ -1,5 +1,6 @@
 package io.github.dzdcache.server.api;
 
+import io.github.dzdcache.cluster.ClusterCodec;
 import io.github.dzdcache.cluster.Protocol;
 import io.github.dzdcache.cluster.RaftEndpoint;
 import io.github.dzdcache.server.DzdCacheApplication;
@@ -19,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class Http2ClusterTest {
     private static int freePort() throws Exception { try (ServerSocket socket = new ServerSocket(0)) { return socket.getLocalPort(); } }
 
-    @Test void clusterTrafficUsesHttp2OnTheServersOwnPortAndRefusesAnotherProtocol() throws Exception {
+    @Test void clusterTrafficUsesHttp2OnTheServersOwnPortAndRefusesAnotherProtocolOrEncoding() throws Exception {
         int port = freePort();
         int peer = freePort();
         try (ConfigurableApplicationContext app = new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
@@ -38,6 +39,11 @@ class Http2ClusterTest {
                 .POST(HttpRequest.BodyPublishers.ofString("{\"type\":\"who-leads\"}")).build(), HttpResponse.BodyHandlers.ofString());
             assertThat(other.statusCode()).isEqualTo(409);
             assertThat(other.body()).contains("cluster protocol " + Protocol.VERSION, "the request uses 1");
+            HttpResponse<String> smile = http.send(HttpRequest.newBuilder(endpoint).header("Authorization", "Bearer cluster")
+                .header(Protocol.HEADER, String.valueOf(Protocol.VERSION)).header(ClusterCodec.HEADER, "smile")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"type\":\"who-leads\"}")).build(), HttpResponse.BodyHandlers.ofString());
+            assertThat(smile.statusCode()).isEqualTo(409);
+            assertThat(smile.body()).contains("encoded as json (dzdcache.cluster-encoding); the request uses smile");
             HttpResponse<String> anonymous = http.send(HttpRequest.newBuilder(endpoint).header(Protocol.HEADER, String.valueOf(Protocol.VERSION))
                 .POST(HttpRequest.BodyPublishers.ofString("{\"type\":\"who-leads\"}")).build(), HttpResponse.BodyHandlers.ofString());
             assertThat(anonymous.statusCode()).isEqualTo(401);

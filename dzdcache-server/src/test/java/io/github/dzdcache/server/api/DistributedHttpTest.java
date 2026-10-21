@@ -32,7 +32,7 @@ class DistributedHttpTest {
     private static final String GET ="{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":42}";
     private static final String SEARCH = "{\"specification\":\"students\",\"schemaVersion\":1,\"dimension\":\"sex\",\"value\":\"female\"}";
 
-    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"http2", "tcp"})
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(strings = {"tcp/json", "tcp/smile", "http2/json", "http2/smile", "websocket/json", "websocket/smile"})
     void twoNodesReplicateThroughTheMasterAndTheSurvivorTakesOverWhenOneLeaves(String transport) throws Exception {
         ConfigurableApplicationContext first = null, second = null;
         try (HttpClient http = HttpClient.newHttpClient()) {
@@ -172,9 +172,11 @@ class DistributedHttpTest {
             if (cause instanceof PortInUseException || cause instanceof BindException) return true;
         return false;
     }
-    private static ConfigurableApplicationContext node(String transport, int port, int clusterPort, int peerClusterPort, int peerPort) {
-        boolean http2 = transport.equals("http2");
+    private static ConfigurableApplicationContext node(String protocol, int port, int clusterPort, int peerClusterPort, int peerPort) {
+        String transport = protocol.substring(0, protocol.indexOf('/'));
+        boolean http2 = !transport.equals("tcp");
         return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port, "--dzdcache.cluster-transport=" + transport, "--server.http2.enabled=" + transport.equals("http2"),
+            "--dzdcache.cluster-encoding=" + protocol.substring(protocol.indexOf('/') + 1),
             "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-" + port,
             "--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? port : clusterPort),
             "--dzdcache.discovery.static-peers[0]=http://localhost:" + (http2 ? peerPort : peerClusterPort),

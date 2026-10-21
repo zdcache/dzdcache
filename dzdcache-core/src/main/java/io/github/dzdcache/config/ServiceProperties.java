@@ -25,6 +25,7 @@ public class ServiceProperties {
     private int clusterPort = 7070;
     private int clusterSize;
     private String clusterTransport = "tcp";
+    private String clusterEncoding = "json";
     private String apiToken = "";
     private String clusterToken = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
@@ -59,9 +60,12 @@ public class ServiceProperties {
             throw new IllegalArgumentException("Replication timeout and sync interval must be at least one millisecond");
         if (apiToken == null || clusterToken == null) throw new IllegalArgumentException("Tokens cannot be null");
         if (clusterSize < 0) throw new IllegalArgumentException("cluster-size cannot be negative");
-        if (!java.util.Set.of("http2", "tcp").contains(clusterTransport))
-            throw new IllegalArgumentException("cluster-transport must be tcp or http2");
+        if (!java.util.Set.of("json", "smile").contains(clusterEncoding))
+            throw new IllegalArgumentException("cluster-encoding must be json or smile");
+        if (!java.util.Set.of("http2", "tcp", "websocket").contains(clusterTransport))
+            throw new IllegalArgumentException("cluster-transport must be tcp, http2 or websocket");
     }
+    public String getClusterEncoding() { return clusterEncoding; } public void setClusterEncoding(String v) { clusterEncoding = v; }
     public String getClusterTransport() { return clusterTransport; } public void setClusterTransport(String v) { clusterTransport = v; }
     public Duration getMaxStaleness() { return maxStaleness; } public void setMaxStaleness(Duration v) { maxStaleness = v; }
     public int getMaxScan() { return maxScan; } public void setMaxScan(int v) { maxScan = v; }
