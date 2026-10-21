@@ -136,7 +136,7 @@ class DistributedHttpTest {
             assertThat(post(http, port, "/test/cache/search", SEARCH, "client").statusCode()).isEqualTo(200);
             String metrics = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/test/actuator/prometheus")).build(),
                 HttpResponse.BodyHandlers.ofString()).body();
-            assertThat(metrics).contains("dzdcache_search_seconds_count{dimension=\"sex\",specification=\"students\"}")
+            assertThat(metrics).contains("dzdcache_search_seconds_count{dimension=\"sex\",filtered=\"false\",specification=\"students\"}")
                 .contains("dzdcache_mutations_total{operation=\"put\",status=\"200\"}")
                 .contains("dzdcache_ready 1.0")
                 .contains("dzdcache_entries{specification=\"students\",version=\"1\"} 2.0");
@@ -174,7 +174,7 @@ class DistributedHttpTest {
     }
     private static ConfigurableApplicationContext node(String transport, int port, int clusterPort, int peerClusterPort, int peerPort) {
         boolean http2 = transport.equals("http2");
-        return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port, "--dzdcache.cluster-transport=" + transport,
+        return new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port, "--dzdcache.cluster-transport=" + transport, "--server.http2.enabled=" + transport.equals("http2"),
             "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=node-" + port,
             "--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? port : clusterPort),
             "--dzdcache.discovery.static-peers[0]=http://localhost:" + (http2 ? peerPort : peerClusterPort),

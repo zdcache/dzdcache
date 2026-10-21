@@ -129,6 +129,12 @@ public final class SchemaType implements RootType<Object> {
             : compoundQuery(def.definition().parts(), value, from, to);
         return new Query(def.internalName(), values);
     }
+    @Override public io.github.dzdcache.cache.Filter.Paths paths() {
+        return new io.github.dzdcache.cache.Filter.Paths() {
+            @Override public java.util.function.Function<Object, List<Object>> values(String path, String type) { return compiled.values(path); }
+            @Override public Object literal(String path, JsonNode value, String type) { return compiled.decodeQuery(path, value); }
+        };
+    }
     @Override public void render(JsonGenerator out, Object root, List<String> fields) {
         compiled.write(out, root, compiled.projection(fields));
     }

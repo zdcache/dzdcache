@@ -167,12 +167,13 @@ The manifest does not install TLS or namespace authorization. Bearer tokens assu
 | `dzdcache.max-snapshot-bytes` | 64 MiB |
 | `dzdcache.replication-page-bytes` | 1 MiB |
 | `dzdcache.max-search-results` | 10,000 |
+| `dzdcache.max-scan` | 100,000; the most roots a search with `scan` may cover before it returns 422 |
 | `dzdcache.revision-retention` | 24 hours |
 | `dzdcache.access-flush-interval` | 1 second |
 | `dzdcache.replication-timeout` | 3 seconds |
 | `dzdcache.sync-interval` | 10 seconds |
 | `dzdcache.cluster-port` | 7070 |
-| `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`. `http2` sends cluster traffic over HTTP/2 to `/internal/raft` on the application's own servlet web server instead, for networks that only let HTTP through; it is slower, every node must use the same transport, and peer URLs then use the application port, which cluster and API traffic share |
+| `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`. `http2` sends cluster traffic over HTTP/2 to `/internal/raft` on the application's own servlet web server instead, which needs `server.http2.enabled` (`DZDCACHE_HTTP2` in the server, off by default because it slows HTTP/1.1 clients), for networks that only let HTTP through; it is slower, every node must use the same transport, and peer URLs then use the application port, which cluster and API traffic share |
 | `dzdcache.cluster-size` | the size a new cluster is founded with; static: the peer list plus this node; Kubernetes: required, equal to `replicas` |
 | `dzdcache.heartbeat-interval` | 200 milliseconds |
 | `dzdcache.election-timeout` | 1 second |

@@ -23,7 +23,7 @@ class Http2ClusterTest {
         int port = freePort();
         int peer = freePort();
         try (ConfigurableApplicationContext app = new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
-                "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.node-id=a", "--dzdcache.discovery.self-url=http://localhost:" + port,
+                "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--server.http2.enabled=true", "--dzdcache.discovery.node-id=a", "--dzdcache.discovery.self-url=http://localhost:" + port,
                 "--dzdcache.discovery.static-peers[0]=http://localhost:" + peer, "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",
                 "--logging.level.root=ERROR", "--spring.main.banner-mode=off");
              HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).build()) {
@@ -42,5 +42,14 @@ class Http2ClusterTest {
                 .POST(HttpRequest.BodyPublishers.ofString("{\"type\":\"who-leads\"}")).build(), HttpResponse.BodyHandlers.ofString());
             assertThat(anonymous.statusCode()).isEqualTo(401);
         }
+    }
+
+    @Test void http2BetweenNodesNeedsHttp2OnTheServer() throws Exception {
+        int port = freePort();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
+                "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.node-id=a",
+                "--dzdcache.discovery.self-url=http://localhost:" + port, "--dzdcache.cluster-token=cluster",
+                "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("dzdcache.cluster-transport is http2, but server.http2.enabled is false");
     }
 }

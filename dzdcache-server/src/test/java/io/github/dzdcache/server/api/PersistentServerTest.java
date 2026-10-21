@@ -60,7 +60,7 @@ class PersistentServerTest {
     private ConfigurableApplicationContext node(int i, int[] ports) {
         boolean http2 = transport.equals("http2");
         List<String> args = new ArrayList<>(List.of("--server.port=" + ports[i], "--dzdcache.discovery.mode=static",
-            "--dzdcache.cluster-transport=" + transport, "--dzdcache.discovery.node-id=node-" + i, "--dzdcache.cluster-port=" + ports[3 + i],
+            "--dzdcache.cluster-transport=" + transport, "--server.http2.enabled=" + transport.equals("http2"), "--dzdcache.discovery.node-id=node-" + i, "--dzdcache.cluster-port=" + ports[3 + i],
             "--dzdcache.discovery.self-url=http://localhost:" + (http2 ? ports[i] : ports[3 + i]), "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",
             "--dzdcache.persistence.enabled=true", "--dzdcache.persistence.directory=" + disks.resolve("node-" + i),
             "--logging.level.root=ERROR", "--spring.main.banner-mode=off"));

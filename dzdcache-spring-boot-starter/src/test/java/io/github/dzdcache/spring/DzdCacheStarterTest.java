@@ -157,6 +157,21 @@ class DzdCacheStarterTest {
             .hasStackTraceContaining("dzdcache.discovery.self-url http://localhost:7070 must use https:// because dzdcache.cluster-tls.enabled is true");
     }
 
+    @Test void typedSearchesNarrowByAPredicateAndCountInProcess() {
+        try (ConfigurableApplicationContext node = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE)
+                .run("--logging.level.root=OFF", "--spring.main.banner-mode=off")) {
+            await(() -> node.getBean(DistributedCache.class).current());
+            ClusterCache<Student, Long> students = students(node);
+            students.put(new Student(1, "Anna", "Oslo", 31));
+            students.put(new Student(2, "Bo", "Oslo", 19));
+            assertThat(students.search("city", student -> student.age() > 20, "Oslo")).extracting(Student::id).containsExactly(1L);
+            assertThat(students.count("city", "Oslo")).isEqualTo(2);
+            assertThat(students.count("city", student -> student.name().startsWith("B"), "Oslo")).isEqualTo(1);
+            assertThat(students.countBy(Student::age, "city", "Oslo")).containsEntry(31, 1L).containsEntry(19, 1L);
+            assertThat(students.scan(student -> student.age() < 20)).extracting(Student::id).containsExactly(2L);
+        } catch (InterruptedException e) { throw new AssertionError(e); }
+    }
+
     @Test void http2BetweenNodesNeedsAServletWebServer() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.self-url=http://localhost:7070",

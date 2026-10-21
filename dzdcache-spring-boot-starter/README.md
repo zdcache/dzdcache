@@ -69,7 +69,8 @@ Values are converted with the service's `ObjectMapper` when there is exactly one
 | `dzdcache.discovery.namespace`, `dzdcache.discovery.service-name` | `default`, `dzdcache-peers` |
 | `dzdcache.cluster-port` | 7070 |
 | `dzdcache.max-staleness` | 0, never answer stale; above 0, a node that cannot confirm it has every acknowledged write answers from its own copy if that was current at most this long ago, and says so; `awaitCurrent()` on `ClusterCoordinator` reports it; it then also stays ready |
-| `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`. `http2` sends cluster traffic over HTTP/2 to `/internal/raft` on the application's own servlet web server instead, for networks that only let HTTP through; it is slower, every node must use the same transport, and peer URLs then use the application port, which cluster and API traffic share |
+| `dzdcache.max-scan` | 100,000; the most roots a search with `scan` may cover before it returns 422 |
+| `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`. `http2` sends cluster traffic over HTTP/2 to `/internal/raft` on the application's own servlet web server instead, which needs `server.http2.enabled` (`DZDCACHE_HTTP2` in the server, off by default because it slows HTTP/1.1 clients), for networks that only let HTTP through; it is slower, every node must use the same transport, and peer URLs then use the application port, which cluster and API traffic share |
 | `dzdcache.cluster-token` | required unless standalone |
 
 The other `dzdcache.*` settings and their defaults are the same as for the [server](../dzdcache-server/README.md#operational-bounds).

@@ -24,4 +24,7 @@ public interface RootType<T> {
         if (fields != null && !fields.isEmpty()) throw new IllegalArgumentException("Field selection is not supported for this type");
         out.writeTree(write(root));
     }
+    default Filter.Paths paths() {
+        throw new IllegalArgumentException("Filters are not available for " + javaClass().getSimpleName() + " roots; use a predicate");
+    }
 }

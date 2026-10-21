@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.function.Predicate;
 import tools.jackson.core.JsonGenerator;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -35,6 +36,7 @@ public final class CacheEngine {
     private final java.util.concurrent.atomic.AtomicInteger saved = new java.util.concurrent.atomic.AtomicInteger();
     private volatile boolean undoOverflowed;
     private final Set<Key> created = ConcurrentHashMap.newKeySet();
+    private volatile int maxScan = 100_000;
 
     public CacheEngine(RootTypeFactory factory, ObjectMapper mapper, int maxSchemas, int maxRevisions) {
         this(factory, mapper, maxSchemas, maxRevisions, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_RETENTION, Clock.systemUTC());
@@ -50,6 +52,11 @@ public final class CacheEngine {
         if (retention == null || retention.toMillis() < 1) throw new IllegalArgumentException("Revision retention must be positive");
         this.factory = factory; this.mapper = mapper; this.maxSchemas = maxSchemas; this.maxRevisions = maxRevisions;
         this.maxSearchResults = maxSearchResults; this.retention = retention.toMillis(); this.clock = clock;
+    }
+
+    public void maxScan(int roots) {
+        if (roots < 1) throw new IllegalArgumentException("max-scan must be positive");
+        maxScan = roots;
     }
 
     public void register(TypeDescriptor descriptor, RootType<?> type) {
@@ -300,7 +307,70 @@ public final class CacheEngine {
     }
 
     public List<Object> search(String specification, int version, String dimension, Object[] values, Integer limit) {
-        return matches(bucket(specification, version), dimension, values, limit);
+        return matches(bucket(specification, version), dimension, values, limit, null, false);
+    }
+
+    public List<Object> search(String specification, int version, String dimension, Object[] values, Integer limit, Predicate<Object> filter) {
+        return matches(bucket(specification, version), dimension, values, limit, filter, false);
+    }
+
+    public List<Object> scan(String specification, int version, Integer limit, Predicate<Object> filter) {
+        return matches(bucket(specification, version), null, null, limit, filter, true);
+    }
+
+    public long count(String specification, int version, String dimension, Object[] values, Predicate<Object> filter, boolean scan) {
+        Bucket bucket = bucket(specification, version);
+        long count = 0;
+        for (Object root : hits(bucket, dimension, values, scan)) if (accepted(bucket, root, filter)) count++;
+        return count;
+    }
+
+    public Map<Object, Long> countBy(String specification, int version, String dimension, Object[] values, Predicate<Object> filter,
+                                     boolean scan, java.util.function.Function<Object, List<Object>> key) {
+        Bucket bucket = bucket(specification, version);
+        Map<Object, Long> counts = new TreeMap<>(Comparator.comparing(String::valueOf));
+        for (Object root : hits(bucket, dimension, values, scan))
+            if (accepted(bucket, root, filter)) for (Object value : new java.util.LinkedHashSet<>(key.apply(root))) counts.merge(value, 1L, Long::sum);
+        return counts;
+    }
+
+    public record Selection(String dimension, Object[] values, Predicate<Object> filter, boolean scan) { }
+
+    public Selection select(String specification, int version, String dimension, JsonNode value, JsonNode from, JsonNode to,
+                            JsonNode filter, boolean scan) {
+        Bucket bucket = bucket(specification, version);
+        if (scan == (dimension != null)) throw new IllegalArgumentException(scan ? "A scan replaces 'dimension'; give one or the other" : "A dimension is required");
+        RootType.Query query = scan ? null : bucket.type.query(dimension, value, from, to);
+        Predicate<Object> predicate = filter == null || filter.isNull() ? null : Filter.parse(filter).compile(bucket.type.paths());
+        return new Selection(scan ? null : query.dimension(), scan ? null : query.values(), predicate, scan);
+    }
+
+    public long countJson(String specification, int version, Selection selection) {
+        return count(specification, version, selection.dimension(), selection.values(), selection.filter(), selection.scan());
+    }
+
+    public Map<Object, Long> countByJson(String specification, int version, Selection selection, String path) {
+        Bucket bucket = bucket(specification, version);
+        return countBy(specification, version, selection.dimension(), selection.values(), selection.filter(), selection.scan(),
+            bucket.type.paths().values(path, null));
+    }
+
+    private Iterable<Object> hits(Bucket bucket, String dimension, Object[] values, boolean scan) {
+        if (!scan) return bucket.cache.search(bucket.type.javaClass(), dimension, values);
+        List<Object> roots = new ArrayList<>();
+        synchronized (bucket) {
+            for (Revision revision : bucket.revisions.values()) {
+                if (!revision.held) continue;
+                if (roots.size() == maxScan) throw new CacheException(422, "A scan covers more than " + maxScan + " roots; search a dimension instead");
+                Object root = bucket.cache.peek(bucket.type.javaClass(), revision.id);
+                if (root != null) roots.add(root);
+            }
+        }
+        return roots;
+    }
+
+    private static boolean accepted(Bucket bucket, Object root, Predicate<Object> filter) {
+        return !bucket.staleRoot(root) && (filter == null || filter.test(root));
     }
 
     public JsonNode get(String specification, int version, JsonNode identity) {
@@ -322,9 +392,12 @@ public final class CacheEngine {
 
     public Rendered searchJson(String specification, int version, String dimension, JsonNode value, JsonNode from,
                                JsonNode to, Integer limit, List<String> fields) {
+        return searchJson(specification, version, select(specification, version, dimension, value, from, to, null, false), limit, fields);
+    }
+
+    public Rendered searchJson(String specification, int version, Selection selection, Integer limit, List<String> fields) {
         Bucket bucket = bucket(specification, version);
-        RootType.Query query = bucket.type.query(dimension, value, from, to);
-        List<Object> roots = matches(bucket, query.dimension(), query.values(), limit);
+        List<Object> roots = matches(bucket, selection.dimension(), selection.values(), limit, selection.filter(), selection.scan());
         var bytes = new java.io.ByteArrayOutputStream();
         try (JsonGenerator out = mapper.createGenerator(bytes)) {
             out.writeStartArray();
@@ -343,16 +416,16 @@ public final class CacheEngine {
                                  JsonNode value, JsonNode from, JsonNode to, Integer limit) {
         Bucket bucket = bucket(specification, version);
         RootType.Query query = bucket.type.query(dimension, value, from, to);
-        return matches(bucket, query.dimension(), query.values(), limit).stream().map(bucket.type::write).toList();
+        return matches(bucket, query.dimension(), query.values(), limit, null, false).stream().map(bucket.type::write).toList();
     }
 
-    private List<Object> matches(Bucket bucket, String dimension, Object[] values, Integer limit) {
+    private List<Object> matches(Bucket bucket, String dimension, Object[] values, Integer limit, Predicate<Object> filter, boolean scan) {
         if (limit != null && (limit < 1 || limit > maxSearchResults))
             throw new IllegalArgumentException("limit must be between 1 and " + maxSearchResults);
         int allowed = limit == null ? maxSearchResults : limit;
         List<Object> result = new ArrayList<>();
-        for (Object root : bucket.cache.search(bucket.type.javaClass(), dimension, values)) {
-            if (bucket.staleRoot(root)) continue;
+        for (Object root : hits(bucket, dimension, values, scan)) {
+            if (!accepted(bucket, root, filter)) continue;
             if (result.size() == allowed) {
                 if (limit != null) break;
                 throw new CacheException(422, "Search matches more than " + maxSearchResults + " roots; narrow it or set a limit");

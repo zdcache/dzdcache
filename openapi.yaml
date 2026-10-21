@@ -164,9 +164,10 @@ paths:
               allOf:
                 - {$ref: '#/components/schemas/SpecificationReference'}
                 - type: object
-                  required: [dimension]
                   properties:
-                    dimension: {type: string}
+                    dimension:
+                      type: string
+                      description: The indexed dimension that selects the candidates. Required unless scan is true.
                     value:
                       description: Required for exact or prefix indexes. For compound dimensions, an array with one value per part, except a last range part.
                       anyOf:
@@ -184,9 +185,19 @@ paths:
                       type: integer
                       minimum: 1
                       description: Return at most this many matching roots, chosen arbitrarily. Without it, more matches than dzdcache.max-search-results return 422.
+                    filter: {$ref: '#/components/schemas/Filter'}
+                    count:
+                      type: boolean
+                      description: Return {"count":n}, the number of matching roots, instead of the roots. Takes no fields or limit.
+                    countBy:
+                      type: string
+                      description: Return the number of matching roots for each value at this path, as an object from value to count. A path through /* counts each root once per distinct element. Takes no fields or limit.
+                    scan:
+                      type: boolean
+                      description: Consider every root of the specification instead of a dimension's matches. Without a dimension, a scan over more than dzdcache.max-scan roots returns 422.
       responses:
         '200':
-          description: Matching complete root graphs, including an authoritative empty array
+          description: Matching complete root graphs, including an authoritative empty array; with count or countBy, an object of counts
           headers:
             X-Dzdcache-Stale: {$ref: '#/components/headers/Stale'}
             X-Dzdcache-Staleness-Ms: {$ref: '#/components/headers/StalenessMs'}
@@ -250,6 +261,10 @@ components:
               detail: {type: string}
               instance: {type: string}
   schemas:
+    Filter:
+      description: 'Evaluated in the cache on each candidate before limit, fields and counting. Either a condition {path, op, value, type} or {all: [...]}, {any: [...]} or {not: {...}}. Paths use dimension syntax; /* matches when any element matches. Ops: eq, ne, lt, lte, gt, gte, in (an array of values), prefix, exists (no value). type (string, integer, number, boolean, timestamp) is only needed for timestamps of JSON-only specifications.'
+      type: object
+      additionalProperties: true
     Scalar:
       type: [string, number, boolean]
     SpecificationReference:

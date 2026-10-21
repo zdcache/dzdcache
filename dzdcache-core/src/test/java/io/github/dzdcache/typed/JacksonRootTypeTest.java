@@ -52,6 +52,25 @@ public class JacksonRootTypeTest {
             .containsExactly(new Student(1, "Anna", "Oslo", 22));
     }
 
+    @Test void searchesCountsAndScansNarrowByAPredicateOnTheJavaRoots() {
+        CacheEngine engine = engine(true);
+        engine.publish(type().describe("students", 1, 100, null));
+        for (long id = 1; id <= 10; id++) engine.apply(put(new Student(id, "N" + id, id % 2 == 0 ? "Oslo" : "Bergen", 18 + (int) id), 1));
+        java.util.function.Predicate<Object> older = root -> ((Student) root).age() >= 24;
+        assertThat(engine.search("students", 1, "city", new Object[] { "Oslo" }, null, older)).extracting(s -> ((Student) s).id())
+            .containsExactlyInAnyOrder(6L, 8L, 10L);
+        assertThat(engine.count("students", 1, "city", new Object[] { "Oslo" }, older, false)).isEqualTo(3);
+        assertThat(engine.count("students", 1, "city", new Object[] { "Bergen" }, null, false)).isEqualTo(5);
+        assertThat(engine.scan("students", 1, null, older)).hasSize(5);
+        assertThat(engine.countBy("students", 1, null, null, null, true, root -> List.of(((Student) root).city())))
+            .containsEntry("Oslo", 5L).containsEntry("Bergen", 5L);
+        engine.maxScan(5);
+        assertThatThrownBy(() -> engine.scan("students", 1, null, older)).isInstanceOfSatisfying(CacheException.class,
+            refused -> assertThat(refused.status()).isEqualTo(422));
+        assertThatThrownBy(() -> engine.select("students", 1, null, null, null, null,
+            mapper.readTree("{\"path\":\"/age\",\"op\":\"gt\",\"value\":1}"), true)).hasMessageContaining("use a predicate");
+    }
+
     @Test void aCaptureRestoresTheSameObjectsOnAnotherNode() {
         CacheEngine origin = engine(true, 2);
         CacheEngine joiner = engine(true, 2);

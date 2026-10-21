@@ -9,7 +9,11 @@ import io.github.zdcache.Getter;
 import io.github.zdcache.internal.Getters;
 import java.util.Collection;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
+import java.util.function.Predicate;
 import tools.jackson.databind.ObjectMapper;
 
 public final class ClusterCache<T, ID> {
@@ -29,13 +33,50 @@ public final class ClusterCache<T, ID> {
         return type.javaClass().cast(engines.engine().find(type.name(), type.version(), id));
     }
 
-    public List<T> search(String dimension, Object... query) { return search(null, dimension, query); }
+    public List<T> search(String dimension, Object... query) { return search((Integer) null, dimension, query); }
 
-    public List<T> search(Getter<T, ?> dimension, Object... query) { return search(null, Getters.name(dimension), query); }
+    public List<T> search(Getter<T, ?> dimension, Object... query) { return search((Integer) null, Getters.name(dimension), query); }
 
     public List<T> search(Integer limit, String dimension, Object... query) {
         cluster.awaitCurrent();
         return engines.engine().search(type.name(), type.version(), dimension, query, limit).stream().map(type.javaClass()::cast).toList();
+    }
+
+    public List<T> search(String dimension, Predicate<? super T> filter, Object... query) {
+        cluster.awaitCurrent();
+        return engines.engine().search(type.name(), type.version(), dimension, query, null, typed(filter)).stream().map(type.javaClass()::cast).toList();
+    }
+
+    public List<T> scan(Predicate<? super T> filter) {
+        cluster.awaitCurrent();
+        return engines.engine().scan(type.name(), type.version(), null, typed(filter)).stream().map(type.javaClass()::cast).toList();
+    }
+
+    public long count(String dimension, Object... query) {
+        cluster.awaitCurrent();
+        return engines.engine().count(type.name(), type.version(), dimension, query, null, false);
+    }
+
+    public long count(String dimension, Predicate<? super T> filter, Object... query) {
+        cluster.awaitCurrent();
+        return engines.engine().count(type.name(), type.version(), dimension, query, typed(filter), false);
+    }
+
+    public <K> Map<K, Long> countBy(Function<? super T, ? extends K> key, String dimension, Object... query) {
+        cluster.awaitCurrent();
+        Map<Object, Long> counts = engines.engine().countBy(type.name(), type.version(), dimension, query, null, false,
+            root -> { K value = key.apply(type.javaClass().cast(root)); return value == null ? List.of() : List.of(value); });
+        Map<K, Long> typedCounts = new LinkedHashMap<>();
+        counts.forEach((value, count) -> {
+            @SuppressWarnings("unchecked") K k = (K) value;
+            typedCounts.put(k, count);
+        });
+        return typedCounts;
+    }
+
+    private Predicate<Object> typed(Predicate<? super T> filter) {
+        Class<T> javaClass = type.javaClass();
+        return root -> filter.test(javaClass.cast(root));
     }
 
     public long put(T value) { return put(value, 0); }

@@ -377,5 +377,57 @@ public final class JsonType implements RootType<JsonRoot> {
         else project(out, mapper.readTree(root.json()), projection(fields));
     }
 
+    private final ThreadLocal<Object[]> parsed = new ThreadLocal<>();
+
+    @Override public io.github.dzdcache.cache.Filter.Paths paths() {
+        return new io.github.dzdcache.cache.Filter.Paths() {
+            @Override public java.util.function.Function<Object, List<Object>> values(String path, String type) {
+                List<String> segments = RuntimeSchemaCompiler.segments(path);
+                String checked = type == null ? null : type.toLowerCase(Locale.ROOT);
+                if (checked != null && !TYPES.contains(checked)) throw invalid("Unsupported filter type: " + type);
+                return root -> {
+                    List<Object> values = new ArrayList<>(2);
+                    gather(tree((JsonRoot) root), segments, 0, checked, path, values);
+                    return values;
+                };
+            }
+            @Override public Object literal(String path, JsonNode value, String type) {
+                if (type != null) {
+                    String checked = type.toLowerCase(Locale.ROOT);
+                    if (!TYPES.contains(checked)) throw invalid("Unsupported filter type: " + type);
+                    return convert(value, checked, path);
+                }
+                if (value.isString()) return value.asString();
+                if (value.isNumber()) return value.decimalValue();
+                if (value.isBoolean()) return value.asBoolean();
+                throw invalid("A filter value must be a string, number or boolean: " + path);
+            }
+        };
+    }
+
+    private JsonNode tree(JsonRoot root) {
+        Object[] last = parsed.get();
+        if (last != null && last[0] == root) return (JsonNode) last[1];
+        JsonNode tree = mapper.readTree(root.json());
+        parsed.set(new Object[] { root, tree });
+        return tree;
+    }
+
+    private static void gather(JsonNode node, List<String> segments, int offset, String type, String path, List<Object> values) {
+        if (node == null || node.isNull()) return;
+        if (offset == segments.size()) {
+            if (type != null) {
+                try { values.add(convert(node, type, path)); } catch (IllegalArgumentException ignored) { }
+            } else if (node.isString()) values.add(node.asString());
+            else if (node.isNumber()) values.add(node.decimalValue());
+            else if (node.isBoolean()) values.add(node.asBoolean());
+            return;
+        }
+        String segment = segments.get(offset);
+        if (segment.equals("*")) {
+            if (node.isArray()) for (JsonNode element : node) gather(element, segments, offset + 1, type, path, values);
+        } else if (node.isObject()) gather(node.get(segment), segments, offset + 1, type, path, values);
+    }
+
     private static IllegalArgumentException invalid(String message) { return RuntimeSchemaCompiler.invalid(message); }
 }

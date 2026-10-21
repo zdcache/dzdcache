@@ -7,7 +7,7 @@ spring:
 server:
   shutdown: graceful
   http2:
-    enabled: true
+    enabled: ${DZDCACHE_HTTP2:false}
 management:
   endpoints:
     web:

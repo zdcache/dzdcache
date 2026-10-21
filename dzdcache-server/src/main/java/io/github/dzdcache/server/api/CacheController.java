@@ -66,7 +66,7 @@ public class CacheController {
     public record IdentityRequest(String specification, int schemaVersion, JsonNode identity, List<String> fields) {}
     public record RemoveRequest(String specification, int schemaVersion, JsonNode identity, Long revision) {}
     public record SearchRequest(String specification, int schemaVersion, String dimension, JsonNode value, JsonNode from, JsonNode to,
-                                Integer limit, List<String> fields) {}
+                                Integer limit, List<String> fields, JsonNode filter, Boolean count, String countBy, Boolean scan) {}
 
     @PostMapping("/entries") public EntryMutation put(@RequestBody PutRequest request) {
         return mutate(EntryMutation.Operation.PUT, () -> cluster.put(java.util.Collections.singletonList(request)).getFirst());
@@ -99,11 +99,35 @@ public class CacheController {
     @PostMapping("/search") public ResponseEntity<byte[]> search(@RequestBody SearchRequest request) {
         ClusterCoordinator.Read read = cluster.awaitCurrent();
         Timer.Sample sample = Timer.start(meters);
-        CacheEngine.Rendered found = engines.engine().searchJson(request.specification(), request.schemaVersion(), request.dimension(),
-            request.value(), request.from(), request.to(), request.limit(), request.fields());
-        sample.stop(meters.timer("dzdcache.search", "specification", request.specification(), "dimension", request.dimension()));
-        meters.summary("dzdcache.search.results", "specification", request.specification()).record(found.count());
-        return answer(ResponseEntity.ok(), read).contentType(MediaType.APPLICATION_JSON).body(found.json());
+        CacheEngine engine = engines.engine();
+        boolean scan = Boolean.TRUE.equals(request.scan());
+        CacheEngine.Selection selection = engine.select(request.specification(), request.schemaVersion(), request.dimension(), request.value(),
+            request.from(), request.to(), request.filter(), scan);
+        String dimension = scan ? "(scan)" : request.dimension();
+        String filtered = Boolean.toString(selection.filter() != null);
+        byte[] body;
+        int count;
+        if (Boolean.TRUE.equals(request.count()) || request.countBy() != null) {
+            if (request.fields() != null || request.limit() != null) throw new IllegalArgumentException("'count' and 'countBy' take no 'fields' or 'limit'");
+            if (request.countBy() != null) {
+                java.util.Map<Object, Long> counts = engine.countByJson(request.specification(), request.schemaVersion(), selection, request.countBy());
+                java.util.Map<String, Long> named = new java.util.LinkedHashMap<>();
+                counts.forEach((value, n) -> named.put(String.valueOf(value instanceof java.math.BigDecimal number ? number.toPlainString() : value), n));
+                body = mapper.writeValueAsBytes(named);
+                count = named.size();
+            } else {
+                long total = engine.countJson(request.specification(), request.schemaVersion(), selection);
+                body = mapper.writeValueAsBytes(java.util.Map.of("count", total));
+                count = 1;
+            }
+        } else {
+            CacheEngine.Rendered found = engine.searchJson(request.specification(), request.schemaVersion(), selection, request.limit(), request.fields());
+            body = found.json();
+            count = found.count();
+        }
+        sample.stop(meters.timer("dzdcache.search", "specification", request.specification(), "dimension", dimension, "filtered", filtered));
+        meters.summary("dzdcache.search.results", "specification", request.specification()).record(count);
+        return answer(ResponseEntity.ok(), read).contentType(MediaType.APPLICATION_JSON).body(body);
     }
     @PostMapping("/entries/invalidate") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void invalidate(@RequestBody RemoveRequest request) {

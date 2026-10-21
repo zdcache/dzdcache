@@ -57,6 +57,7 @@ public class DzdCacheAutoConfiguration {
         return new EngineHolder(() -> {
             CacheEngine engine = new CacheEngine(factory, mapper.mapper(), properties.getMaxSchemas(), properties.getMaxRevisionsPerSchema(),
                 properties.getMaxSearchResults(), properties.getRevisionRetention(), java.time.Clock.systemUTC());
+            engine.maxScan(properties.getMaxScan());
             for (Typed type : typed) engine.register(type.descriptor(), type.type());
             return engine;
         });
@@ -86,9 +87,14 @@ public class DzdCacheAutoConfiguration {
 
     @Bean @ConditionalOnMissingBean
     RaftTransport dzdcacheTransport(DzdCacheMapper mapper, ServiceProperties properties, DiscoveryProperties discovery,
-                                    ObjectProvider<SslBundles> bundles, ObjectProvider<Http2Cluster.Marker> http2) {
+                                    ObjectProvider<SslBundles> bundles, ObjectProvider<Http2Cluster.Marker> http2,
+                                    org.springframework.core.env.Environment environment) {
         SSLContext ssl = clusterSsl(properties, discovery, bundles);
-        if (http2.getIfAvailable() != null) return new Http2RaftTransport(mapper.mapper(), properties, ssl);
+        if (http2.getIfAvailable() != null) {
+            if (!environment.getProperty("server.http2.enabled", Boolean.class, false))
+                throw new IllegalStateException("dzdcache.cluster-transport is http2, but server.http2.enabled is false");
+            return new Http2RaftTransport(mapper.mapper(), properties, ssl);
+        }
         if (properties.getClusterTransport().equals("http2") && !discovery.getMode().equals("standalone"))
             throw new IllegalStateException("dzdcache.cluster-transport is http2, but this application runs no servlet web server");
         return new TcpRaftTransport(mapper.mapper(), properties, ssl);
