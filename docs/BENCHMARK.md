@@ -1,6 +1,6 @@
 # Searching a distributed cache: dzdcache against Hazelcast, Ignite, Infinispan and Redis Stack
 
-Generated 2026-10-20 (full run) on OpenJDK 64-Bit Server VM 25.0.1, 11 CPUs, everything on one machine. Every subject runs three nodes; data is loaded through node 1 and every measured call is made on node 2 by 4 threads. Operations per second, higher is better; ± is the 99.9% confidence interval, shown when there are enough measurements.
+Generated 2026-10-21 (full run) on OpenJDK 64-Bit Server VM 25.0.1, 11 CPUs, everything on one machine. Every subject runs three nodes; data is loaded through node 1 and every measured call is made on node 2 by 4 threads. Operations per second, higher is better; ± is the 99.9% confidence interval, shown when there are enough measurements. Every measurement runs in 3 fresh JVMs that each start their own cluster, and measures 3 × 3 s after a warm-up of 5 × 3 s, so that the JVMs, including the dzdcache servers in Docker, have compiled their hot code before they are measured.
 
 The subjects fall into two groups that are only compared within each group:
 
@@ -17,46 +17,46 @@ Docker had 4 CPUs and 6.2 GB of memory for the out-of-process subjects.
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 4,793,454 ± 1,204,756 | 1,355,754 ± 601,557 | 365,471 ± 74,275 |
-| hazelcast | 22,001 ± 8,459 | 14,097 ± 6,433 | 5,717 ± 1,650 |
-| ignite | 224,655 ± 182,074 | 40,892 ± 16,988 | 7,100 ± 3,195 |
-| infinispan | 42,288 ± 13,913 | 13,240 ± 2,348 | 3,225 ± 1,438 |
+| dzdcache-embedded | 4,705,270 ± 528,623 | 1,628,874 ± 106,570 | 376,959 ± 10,531 |
+| hazelcast | 25,200 ± 312 | 16,867 ± 420 | 6,917 ± 502 |
+| ignite | 314,259 ± 8,931 | 45,116 ± 1,793 | 9,379 ± 195 |
+| infinispan | 142,721 ± 885 | 24,033 ± 1,971 | 4,287 ± 291 |
 
 #### Prefix: names starting with two letters
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 4,728,975 ± 437,715 | 4,663,305 ± 1,512,563 | 2,064,595 ± 307,773 |
-| hazelcast | 20,004 ± 4,907 | 19,730 ± 6,329 | 17,107 ± 5,775 |
-| ignite | 235,008 ± 137,648 | 194,901 ± 189,424 | 78,720 ± 32,264 |
-| infinispan | 36,432 ± 7,119 | 16,395 ± 5,094 | 5,597 ± 1,701 |
+| dzdcache-embedded | 5,134,435 ± 110,908 | 5,082,251 ± 688,534 | 2,195,613 ± 188,788 |
+| hazelcast | 25,534 ± 2,773 | 24,661 ± 848 | 21,026 ± 716 |
+| ignite | 771,571 ± 6,298 | 330,735 ± 4,097 | 97,988 ± 1,258 |
+| infinispan | 120,159 ± 43,607 | 40,213 ± 2,343 | 11,666 ± 1,802 |
 
 #### Range: ages within ten years
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 1,631,646 ± 408,354 | 186,858 ± 97,888 | 31,830 ± 22,089 |
-| hazelcast | 15,307 ± 3,192 | 3,099 ± 4,890 | 863 ± 148 |
-| ignite | 57,573 ± 19,798 | 4,956 ± 4,383 | 890 ± 171 |
-| infinispan | 31,310 ± 5,095 | 3,839 ± 674 | 592 ± 60 |
+| dzdcache-embedded | 1,783,861 ± 130,620 | 220,833 ± 8,450 | 40,410 ± 539 |
+| hazelcast | 17,874 ± 787 | 4,975 ± 458 | 1,027 ± 60 |
+| ignite | 62,339 ± 2,071 | 6,508 ± 234 | 1,105 ± 61 |
+| infinispan | 56,140 ± 818 | 4,434 ± 221 | 730 ± 19 |
 
 #### Compound: a city and an age range
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 4,487,618 ± 821,187 | 3,394,865 ± 514,019 | 1,346,293 ± 326,455 |
-| hazelcast | 18,750 ± 5,264 | 18,018 ± 8,179 | 13,030 ± 6,277 |
-| ignite | 316,810 ± 396,259 | 151,058 ± 117,845 | 37,913 ± 20,207 |
-| infinispan | 33,114 ± 8,858 | 14,228 ± 3,130 | 4,856 ± 1,643 |
+| dzdcache-embedded | 4,951,294 ± 849,052 | 3,895,928 ± 412,735 | 1,519,216 ± 18,239 |
+| hazelcast | 26,141 ± 475 | 22,875 ± 2,625 | 16,118 ± 3,739 |
+| ignite | 744,639 ± 7,467 | 199,506 ± 3,943 | 50,800 ± 3,875 |
+| infinispan | 120,388 ± 2,622 | 38,843 ± 1,362 | 9,624 ± 989 |
 
 #### Nested collection: everyone with a tag
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 1,087,348 ± 461,519 | 108,485 ± 68,930 | 14,586 ± 3,527 |
-| hazelcast | 14,941 ± 6,534 | 4,381 ± 1,037 | 980 ± 228 |
-| ignite | 19,245 ± 8,882 | 1,857 ± 584 | 308 ± 52 |
-| infinispan | 27,853 ± 7,792 | 3,493 ± 510 | 644 ± 63 |
+| dzdcache-embedded | 1,443,735 ± 75,723 | 125,813 ± 4,044 | 17,852 ± 1,843 |
+| hazelcast | 18,469 ± 144 | 5,546 ± 683 | 1,142 ± 109 |
+| ignite | 22,745 ± 281 | 2,137 ± 115 | 338 ± 11 |
+| infinispan | 56,831 ± 8,048 | 4,494 ± 119 | 776 ± 18 |
 
 ### Key-value, for comparison
 
@@ -66,19 +66,19 @@ dzdcache is built for the searches above. Lookups by id and writes are shown for
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 4,899,920 ± 817,967 | 4,850,184 ± 638,234 | 4,529,147 ± 729,256 |
-| hazelcast | 5,763,422 ± 1,010,217 | 5,652,657 ± 1,442,939 | 4,999,113 ± 853,264 |
-| ignite | 4,907,761 ± 934,380 | 4,647,595 ± 540,435 | 4,033,912 ± 419,812 |
-| infinispan | 105,464,542 ± 38,403,314 | 87,261,939 ± 48,347,472 | 66,562,655 ± 17,457,337 |
+| dzdcache-embedded | 5,274,062 ± 501,030 | 5,144,737 ± 115,111 | 4,981,482 ± 95,681 |
+| hazelcast | 5,977,059 ± 167,369 | 6,011,324 ± 153,120 | 5,596,778 ± 71,991 |
+| ignite | 5,246,433 ± 505,529 | 4,854,223 ± 116,253 | 4,768,776 ± 126,319 |
+| infinispan | 103,451,508 ± 1,582,021 | 100,832,890 ± 1,732,696 | 91,129,014 ± 1,400,051 |
 
 #### put
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-embedded | 2,154 ± 729 | 2,664 ± 235 | 2,317 ± 276 |
-| hazelcast | 16,501 ± 6,654 | 16,084 ± 2,565 | 17,340 ± 5,455 |
-| ignite | 2,427 ± 699 | 2,161 ± 272 | 2,341 ± 344 |
-| infinispan | 6,591 ± 2,723 | 7,972 ± 808 | 6,049 ± 5,097 |
+| dzdcache-embedded | 6,999 ± 53 | 6,900 ± 266 | 6,553 ± 2,042 |
+| hazelcast | 19,644 ± 166 | 19,767 ± 423 | 20,237 ± 190 |
+| ignite | 4,224 ± 80 | 4,094 ± 142 | 4,148 ± 1,191 |
+| infinispan | 12,006 ± 155 | 11,879 ± 153 | 11,825 ± 460 |
 
 ## Out-of-process caches
 
@@ -88,36 +88,36 @@ dzdcache is built for the searches above. Lookups by id and writes are shown for
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 2,648 ± 1,595 | 1,969 ± 649 | 1,157 ± 228 |
-| redis-stack | 6,978 ± 370 | 2,597 ± 170 | 470 ± 83 |
+| dzdcache-server | 7,892 ± 502 | 5,842 ± 69 | 2,267 ± 63 |
+| redis-stack | 7,760 ± 174 | 2,595 ± 77 | 491 ± 15 |
 
 #### Prefix: names starting with two letters
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 2,547 ± 1,260 | 2,774 ± 1,620 | 2,356 ± 1,096 |
-| redis-stack | 7,918 ± 1,783 | 6,986 ± 368 | 4,211 ± 133 |
+| dzdcache-server | 8,418 ± 142 | 8,016 ± 252 | 7,013 ± 145 |
+| redis-stack | 8,873 ± 211 | 7,902 ± 77 | 4,422 ± 90 |
 
 #### Range: ages within ten years
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 1,871 ± 993 | 895 ± 294 | 270 ± 21 |
-| redis-stack | 3,421 ± 289 | 342 ± 48 | 60 ± 7 |
+| dzdcache-server | 6,229 ± 146 | 1,740 ± 32 | 372 ± 10 |
+| redis-stack | 3,411 ± 70 | 339 ± 7 | 66 ± 2 |
 
 #### Compound: a city and an age range
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 2,383 ± 1,229 | 2,540 ± 1,329 | 2,334 ± 1,324 |
-| redis-stack | 7,214 ± 1,649 | 4,541 ± 281 | 1,715 ± 126 |
+| dzdcache-server | 8,360 ± 125 | 7,662 ± 305 | 6,077 ± 154 |
+| redis-stack | 8,606 ± 305 | 4,534 ± 478 | 1,750 ± 25 |
 
 #### Nested collection: everyone with a tag
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 2,134 ± 942 | 899 ± 262 | 261 ± 83 |
-| redis-stack | 3,974 ± 135 | 396 ± 20 | 71 ± 3 |
+| dzdcache-server | 6,254 ± 378 | 1,789 ± 62 | 372 ± 19 |
+| redis-stack | 3,932 ± 78 | 373 ± 107 | 71 ± 23 |
 
 ### Key-value, for comparison
 
@@ -127,15 +127,15 @@ dzdcache is built for the searches above. Lookups by id and writes are shown for
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 2,326 ± 1,294 | 2,595 ± 1,298 | 2,812 ± 1,685 |
-| redis-stack | 12,010 ± 2,984 | 12,169 ± 1,389 | 12,189 ± 890 |
+| dzdcache-server | 8,315 ± 298 | 8,415 ± 114 | 8,311 ± 156 |
+| redis-stack | 12,765 ± 333 | 12,762 ± 68 | 12,439 ± 545 |
 
 #### put
 
 | Subject | 1,000 people | 10,000 people | 50,000 people |
 |---|---:|---:|---:|
-| dzdcache-server | 227 ± 129 | 265 ± 274 | 281 ± 152 |
-| redis-stack | 7,922 ± 10,385 | 10,318 ± 2,574 | 9,940 ± 2,710 |
+| dzdcache-server | 2,512 ± 93 | 2,590 ± 44 | 2,602 ± 68 |
+| redis-stack | 10,987 ± 82 | 10,885 ± 172 | 10,975 ± 238 |
 
 ## Is an acknowledged write visible on another node?
 
@@ -154,18 +154,18 @@ dzdcache is built for the searches above. Lookups by id and writes are shown for
 
 | Subject | Runs | People | Bytes per person | How |
 |---|---|---:|---:|---|
-| dzdcache-embedded | in-process | 50,000 | 1,509 | retained heap in this JVM divided by its 3 nodes |
+| dzdcache-embedded | in-process | 50,000 | 1,521 | retained heap in this JVM divided by its 3 nodes |
 | dzdcache-server | out-of-process | 50,000 | – | not measured: the nodes run in other processes |
-| hazelcast | in-process | 50,000 | – | com.hazelcast.core.HazelcastException: Cannot bind to a given address: /127.0.0.1. Hazelcast cannot start. Port [57864] is already in use and auto-increment is disabled. |
-| ignite | in-process | 50,000 | 606 | reported by node 2 (off-heap data region) |
-| infinispan | in-process | 50,000 | 359 | retained heap in this JVM divided by its 3 nodes |
-| redis-stack | out-of-process | 50,000 | 880 | reported by node 2 (used memory) |
+| hazelcast | in-process | 50,000 | 533 | retained heap in this JVM divided by its 3 nodes |
+| ignite | in-process | 50,000 | 622 | reported by node 2 (off-heap data region) |
+| infinispan | in-process | 50,000 | 326 | retained heap in this JVM divided by its 3 nodes |
+| redis-stack | out-of-process | 50,000 | 879 | reported by node 2 (used memory) |
 
 ## How each subject is set up
 
 | Subject | Runs | Settings |
 |---|---|---|
-| dzdcache-embedded | in-process | 3 Spring Boot starter instances in one JVM over HTTP cluster ports; exact city, prefix name, range age, compound city+age and exact-each tags; reads are local on instance 2 and wait for a read lease |
+| dzdcache-embedded | in-process | 3 Spring Boot starter instances in one JVM over TCP cluster ports; exact city, prefix name, range age, compound city+age and exact-each tags; reads are local on instance 2 and wait for a read lease |
 | dzdcache-server | out-of-process | 3 dzdcache server containers (dzdcache-server:benchmark) on a Docker network; JSON over HTTP/1.1 from java.net.http to server 2 through Docker's port mapping; JSON-only registration with the same dimensions |
 | hazelcast | in-process | Hazelcast 5.7.0, 3 embedded members in one JVM with TCP-IP join on 127.0.0.1; IMap with backupCount=2 (sync), readBackupData=true, in-memory format OBJECT, zero-config Compact serialization of the record; indexes HASH city, SORTED name, SORTED age, SORTED compound city+age and HASH tags[any]; Predicates queries on member 2 |
 | ignite | in-process | 3 Ignite 2.17 server nodes in one JVM; REPLICATED TRANSACTIONAL FULL_SYNC caches with SQL indexes on city, name, age and (city, age), tags in a second replicated PERSON_TAG(personId, tag) table indexed on tag, written in the same pessimistic transaction and joined for the tag search; SQL on node 2 runs against its local replica, Ignite's default for replicated tables |
