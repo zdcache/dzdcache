@@ -1285,7 +1285,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         lastMasterContact = now;
         syncedWithMaster = request.inSync();
         clusterId = request.clusterId();
-        electionDeadline = request.members().contains(sender.id()) ? now + electionTimeout() : now;
+        electionDeadline = now + electionTimeout();
         if (install != null || persistingInstall) return refusal(false, true);
         if (resyncRequired) return refusal(true, false);
         long previous = request.previousIndex();
@@ -1316,6 +1316,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             applyCommitted();
         }
         compact();
+        if (configs.lastEntry() != null && configs.lastKey() <= commitIndex && config().voters().stream().noneMatch(voter -> voter.id().equals(sender.id())))
+            electionDeadline = now;
         return new Message.Appended(term, true, match, log.lastIndex(), false, false, false, memberIds(), appliedIndex);
     }
 
