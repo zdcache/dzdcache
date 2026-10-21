@@ -52,6 +52,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
         private final Map<Long, Pending> pending = new ConcurrentHashMap<>();
         private volatile FrameChannel channel;
         private volatile boolean broken;
+        private volatile Throwable failure;
         private volatile long lastHeard = System.nanoTime();
 
         private record Pending(CompletableFuture<Message> reply, long sentAt) { }
@@ -65,7 +66,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
             long id = ids.incrementAndGet();
             CompletableFuture<Message> reply = new CompletableFuture<>();
             pending.put(id, new Pending(reply, System.nanoTime()));
-            if (broken) { fail(id, new IOException("The connection to " + peer + " is closed")); return reply; }
+            if (broken) { fail(id, failure != null ? failure : new IOException("The connection to " + peer + " is closed")); return reply; }
             queue.add(new FrameChannel.Outgoing(id, message));
             return reply.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS).whenComplete((answer, error) -> {
                 Pending timedOut = pending.remove(id);
@@ -133,6 +134,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
         }
 
         private void breakOff(Throwable failure) {
+            if (this.failure == null) this.failure = failure;
             broken = true;
             connections.remove(peer.getHost() + ":" + peer.getPort(), this);
             FrameChannel current = channel;
