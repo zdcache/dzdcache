@@ -370,7 +370,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public void crash() { closed = true; }
 
     @Override public void close() {
-        if (!closed) leave();
+        if (!closed && !storage.durable()) leave();
         closed = true;
         timers.close();
     }
