@@ -28,7 +28,8 @@ val igniteJvmArgs = listOf("java.base/jdk.internal.misc", "java.base/sun.nio.ch"
         "jdk.management/com.sun.management.internal", "java.base/java.io", "java.base/java.nio", "java.base/java.net", "java.base/java.util",
         "java.base/java.util.concurrent", "java.base/java.util.concurrent.locks", "java.base/java.util.concurrent.atomic", "java.base/java.lang",
         "java.base/java.lang.invoke", "java.base/java.math", "java.sql/java.sql", "java.base/java.lang.reflect", "java.base/java.time",
-        "java.base/java.text", "java.management/sun.management", "java.desktop/java.awt.font").map { "--add-opens=$it=ALL-UNNAMED" }
+        "java.base/java.text", "java.management/sun.management", "java.desktop/java.awt.font").map { "--add-opens=$it=ALL-UNNAMED" } +
+    listOf("--add-modules=java.se", "--add-exports=java.base/jdk.internal.ref=ALL-UNNAMED")
 val subjects = providers.gradleProperty("benchmark.subjects").orElse("")
 val persistence = providers.gradleProperty("benchmark.persistence").orElse("false")
 val transport = providers.gradleProperty("benchmark.transport").orElse("tcp")
