@@ -10,6 +10,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.dataformat.smile.SmileMapper;
 
 public final class ChangeHub implements AutoCloseable {
     public record Position(long index, int ordinal) implements Comparable<Position> {
@@ -29,10 +31,25 @@ public final class ChangeHub implements AutoCloseable {
 
     public interface Subscription extends AutoCloseable { @Override void close(); }
 
+    private record Kept(Position position, Change change, byte[] value) {
+        static Kept of(Event event) {
+            Change change = event.change();
+            if (change.value() == null) return new Kept(event.position(), change, null);
+            return new Kept(event.position(), new Change(change.specification(), change.schemaVersion(), change.identity(), change.revision(),
+                change.kind(), null, change.at()), SMILE.writeValueAsBytes(change.value()));
+        }
+        Event event() {
+            if (value == null) return new Event(position, change);
+            return new Event(position, new Change(change.specification(), change.schemaVersion(), change.identity(), change.revision(),
+                change.kind(), SMILE.readTree(value), change.at()));
+        }
+    }
+
     private static final int QUEUE = 10_000;
+    private static final ObjectMapper SMILE = SmileMapper.builder().build();
 
     private final int capacity;
-    private final ArrayDeque<Event> buffer = new ArrayDeque<>();
+    private final ArrayDeque<Kept> buffer = new ArrayDeque<>();
     private final List<Subscriber> subscribers = new CopyOnWriteArrayList<>();
     private final Counter events;
     private final Counter resets;
@@ -40,7 +57,7 @@ public final class ChangeHub implements AutoCloseable {
     private Position latest;
 
     public ChangeHub(int capacity, MeterRegistry meters) {
-        if (capacity < 1) throw new IllegalArgumentException("changes-buffer must be positive");
+        if (capacity < 0) throw new IllegalArgumentException("changes-buffer cannot be negative");
         this.capacity = capacity;
         events = meters.counter("dzdcache.changes.events");
         resets = meters.counter("dzdcache.changes.resets");
@@ -56,17 +73,20 @@ public final class ChangeHub implements AutoCloseable {
     }
 
     private void add(Event event) {
-        buffer.addLast(event);
         latest = event.position();
         if (event.change().kind() == Change.Kind.RESET) horizon = later(horizon, event.position());
-        if (buffer.size() > capacity) horizon = later(horizon, buffer.removeFirst().position());
+        if (capacity == 0) horizon = later(horizon, event.position());
+        else {
+            buffer.addLast(Kept.of(event));
+            if (buffer.size() > capacity) horizon = later(horizon, buffer.removeFirst().position());
+        }
         events.increment();
         for (Subscriber subscriber : subscribers) subscriber.offer(event);
     }
 
     public synchronized Position latest() { return latest; }
 
-    synchronized List<Event> recent() { return List.copyOf(buffer); }
+    synchronized List<Event> recent() { return buffer.stream().map(Kept::event).toList(); }
 
     private static Position later(Position current, Position candidate) {
         return current == null || candidate.compareTo(current) > 0 ? candidate : current;
@@ -76,7 +96,7 @@ public final class ChangeHub implements AutoCloseable {
         Subscriber subscriber = new Subscriber(filter, listener);
         if (from != null) {
             if (horizon != null && from.compareTo(horizon) < 0) subscriber.reset(from.index());
-            for (Event event : buffer) if (event.position().compareTo(from) > 0) subscriber.offer(event);
+            for (Kept kept : buffer) if (kept.position().compareTo(from) > 0) subscriber.offer(kept.event());
         }
         subscribers.add(subscriber);
         subscriber.start();

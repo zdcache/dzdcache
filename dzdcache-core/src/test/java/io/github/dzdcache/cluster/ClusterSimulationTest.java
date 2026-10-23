@@ -801,6 +801,7 @@ class ClusterSimulationTest {
 
     @Test void everyNodeEmitsTheSameChangesAtTheSamePositions() {
         SimulatedCluster cluster = new SimulatedCluster(30);
+        cluster.properties.setChangesBuffer(10_000);
         cluster.properties.setSyncInterval(java.time.Duration.ofMillis(300));
         TypeDescriptor students = cluster.students(5);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c");
@@ -828,6 +829,7 @@ class ClusterSimulationTest {
 
     @Test void aSnapshotInstallTellsSubscribersToStartOver() {
         SimulatedCluster cluster = new SimulatedCluster(31);
+        cluster.properties.setChangesBuffer(10_000);
         TypeDescriptor students = cluster.students(1_000);
         cluster.properties.setLogRetentionBytes(2_000);
         cluster.configure("a", "b", "c");
