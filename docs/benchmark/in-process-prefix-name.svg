@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="306" viewBox="0 0 720 306" role="img" aria-labelledby="title">
+<title id="title">Prefix: names starting with two letters (in-process)</title>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:12px}
+.tick,.value{font-size:11px;font-variant-numeric:tabular-nums}
+.grid{stroke-width:1}.baseline{stroke-width:1}
+.surface{fill:#fcfcfb}.primary{fill:#0b0b0b}.secondary{fill:#52514e}.muted{fill:#898781}.grid{stroke:#e1e0d9}.baseline{stroke:#c3c2b7}
+.s0{fill:#2a78d6}.s1{fill:#eb6834}.s2{fill:#1baf7a}.s3{fill:#eda100}.s4{fill:#e87ba4}.s5{fill:#008300}.s6{fill:#6250d6}.s7{fill:#e34948}
+@media (prefers-color-scheme: dark){
+.surface{fill:#1a1a19}.primary{fill:#f0efec}.secondary{fill:#c3c2b7}.muted{fill:#898781}.grid{stroke:#2c2c2a}.baseline{stroke:#383835}
+.s0{fill:#3987e5}.s1{fill:#d95926}.s2{fill:#199e70}.s3{fill:#c98500}.s4{fill:#d55181}.s5{fill:#008300}.s6{fill:#9085e9}.s7{fill:#e66767}
+}
+</style>
+<rect class="surface" width="100%" height="100%" rx="8"/>
+<rect class="s0" x="114.0" y="14" width="10" height="10" rx="2"/><text class="secondary" x="129.0" y="23">dzdcache-embedded</text>
+<rect class="s1" x="261.2" y="14" width="10" height="10" rx="2"/><text class="secondary" x="276.2" y="23">hazelcast</text>
+<rect class="s2" x="355.6" y="14" width="10" height="10" rx="2"/><text class="secondary" x="370.6" y="23">ignite</text>
+<rect class="s3" x="430.2" y="14" width="10" height="10" rx="2"/><text class="secondary" x="445.2" y="23">infinispan</text>
+<line class="grid" x1="114.0" y1="34" x2="114.0" y2="262"/><text class="muted tick" x="114.0" y="278" text-anchor="middle">1K</text>
+<line class="grid" x1="249.5" y1="34" x2="249.5" y2="262"/><text class="muted tick" x="249.5" y="278" text-anchor="middle">10K</text>
+<line class="grid" x1="385.0" y1="34" x2="385.0" y2="262"/><text class="muted tick" x="385.0" y="278" text-anchor="middle">100K</text>
+<line class="grid" x1="520.5" y1="34" x2="520.5" y2="262"/><text class="muted tick" x="520.5" y="278" text-anchor="middle">1M</text>
+<line class="grid" x1="656.0" y1="34" x2="656.0" y2="262"/><text class="muted tick" x="656.0" y="278" text-anchor="middle">10M</text>
+<line class="baseline" x1="114.0" y1="34" x2="114.0" y2="262"/>
+<text class="muted" x="385.0" y="298" text-anchor="middle">operations per second, logarithmic scale</text>
+<text class="primary" x="102" y="75.0" text-anchor="end">1,000 people</text>
+<g><title>dzdcache-embedded, 1,000 people: 5,759,971</title><path class="s0" d="M114.0 40.0H619.5A4.0 4.0 0 0 1 623.5 44.0V50.0A4.0 4.0 0 0 1 619.5 54.0H114.0Z"/><text class="secondary value" x="629.5" y="51">5.8M</text></g>
+<g><title>hazelcast, 1,000 people: 26,565</title><path class="s1" d="M114.0 56.0H303.0A4.0 4.0 0 0 1 307.0 60.0V66.0A4.0 4.0 0 0 1 303.0 70.0H114.0Z"/><text class="secondary value" x="313.0" y="67">26.6K</text></g>
+<g><title>ignite, 1,000 people: 779,776</title><path class="s2" d="M114.0 72.0H501.9A4.0 4.0 0 0 1 505.9 76.0V82.0A4.0 4.0 0 0 1 501.9 86.0H114.0Z"/><text class="secondary value" x="511.9" y="83">780K</text></g>
+<g><title>infinispan, 1,000 people: 130,881</title><path class="s3" d="M114.0 88.0H396.8A4.0 4.0 0 0 1 400.8 92.0V98.0A4.0 4.0 0 0 1 396.8 102.0H114.0Z"/><text class="secondary value" x="406.8" y="99">131K</text></g>
+<text class="primary" x="102" y="155.0" text-anchor="end">10,000 people</text>
+<g><title>dzdcache-embedded, 10,000 people: 6,636,151</title><path class="s0" d="M114.0 120.0H627.9A4.0 4.0 0 0 1 631.9 124.0V130.0A4.0 4.0 0 0 1 627.9 134.0H114.0Z"/><text class="secondary value" x="637.9" y="131">6.6M</text></g>
+<g><title>hazelcast, 10,000 people: 24,418</title><path class="s1" d="M114.0 136.0H298.0A4.0 4.0 0 0 1 302.0 140.0V146.0A4.0 4.0 0 0 1 298.0 150.0H114.0Z"/><text class="secondary value" x="308.0" y="147">24.4K</text></g>
+<g><title>ignite, 10,000 people: 330,266</title><path class="s2" d="M114.0 152.0H451.3A4.0 4.0 0 0 1 455.3 156.0V162.0A4.0 4.0 0 0 1 451.3 166.0H114.0Z"/><text class="secondary value" x="461.3" y="163">330K</text></g>
+<g><title>infinispan, 10,000 people: 39,965</title><path class="s3" d="M114.0 168.0H327.0A4.0 4.0 0 0 1 331.0 172.0V178.0A4.0 4.0 0 0 1 327.0 182.0H114.0Z"/><text class="secondary value" x="337.0" y="179">40K</text></g>
+<text class="primary" x="102" y="235.0" text-anchor="end">50,000 people</text>
+<g><title>dzdcache-embedded, 50,000 people: 2,426,479</title><path class="s0" d="M114.0 200.0H568.7A4.0 4.0 0 0 1 572.7 204.0V210.0A4.0 4.0 0 0 1 568.7 214.0H114.0Z"/><text class="secondary value" x="578.7" y="211">2.4M</text></g>
+<g><title>hazelcast, 50,000 people: 20,354</title><path class="s1" d="M114.0 216.0H287.3A4.0 4.0 0 0 1 291.3 220.0V226.0A4.0 4.0 0 0 1 287.3 230.0H114.0Z"/><text class="secondary value" x="297.3" y="227">20.4K</text></g>
+<g><title>ignite, 50,000 people: 94,179</title><path class="s2" d="M114.0 232.0H377.5A4.0 4.0 0 0 1 381.5 236.0V242.0A4.0 4.0 0 0 1 377.5 246.0H114.0Z"/><text class="secondary value" x="387.5" y="243">94.2K</text></g>
+<g><title>infinispan, 50,000 people: 10,665</title><path class="s3" d="M114.0 248.0H249.3A4.0 4.0 0 0 1 253.3 252.0V258.0A4.0 4.0 0 0 1 249.3 262.0H114.0Z"/><text class="secondary value" x="259.3" y="259">10.7K</text></g>
+</svg>

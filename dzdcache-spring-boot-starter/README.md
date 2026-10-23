@@ -75,7 +75,7 @@ An instance with `dzdcache.role: learner` can also follow a cluster of dzdcache 
 | `dzdcache.learner-fresh-reads` | `true`; a learner holds a read lease like a follower, so its reads are fresh and the master waits for it to apply a write before acknowledging it. `false` takes no lease: writes do not wait for the learner, which then only answers stale within `max-staleness` (required above 0); for learners far from the members |
 | `dzdcache.max-learners` | 16; the most learners the master accepts |
 | `dzdcache.max-scan` | 100,000; the most roots a search with `scan` may cover before it returns 422 |
-| `dzdcache.changes-buffer` | 100,000; recent changes kept for subscribers that resume; an older position gets `RESET` |
+| `dzdcache.changes-buffer` | 0; recent changes kept for subscribers that resume; an older position gets `RESET` |
 | `dzdcache.cluster-transport` | `tcp`; framed messages on `cluster-port`, the fastest. `websocket` sends cluster traffic over a WebSocket to `/internal/raft/ws` on the application's own servlet web server, and `http2` over HTTP/2 to `/internal/raft`, which needs `server.http2.enabled` (`DZDCACHE_HTTP2` in the server, off by default because it slows HTTP/1.1 clients); both are for networks that only let HTTP through, `websocket` is the faster of the two, and peer URLs then use the application port, which cluster and API traffic share. Every node must use the same transport |
 | `dzdcache.cluster-encoding` | `json`; `smile` encodes cluster messages in binary Smile instead. Every node must use the same encoding |
 | `dzdcache.cluster-token` | required unless standalone |

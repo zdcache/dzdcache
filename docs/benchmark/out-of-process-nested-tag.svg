@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="210" viewBox="0 0 720 210" role="img" aria-labelledby="title">
+<title id="title">Nested collection: everyone with a tag (out-of-process)</title>
+<style>
+text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:12px}
+.tick,.value{font-size:11px;font-variant-numeric:tabular-nums}
+.grid{stroke-width:1}.baseline{stroke-width:1}
+.surface{fill:#fcfcfb}.primary{fill:#0b0b0b}.secondary{fill:#52514e}.muted{fill:#898781}.grid{stroke:#e1e0d9}.baseline{stroke:#c3c2b7}
+.s0{fill:#2a78d6}.s1{fill:#eb6834}.s2{fill:#1baf7a}.s3{fill:#eda100}.s4{fill:#e87ba4}.s5{fill:#008300}.s6{fill:#6250d6}.s7{fill:#e34948}
+@media (prefers-color-scheme: dark){
+.surface{fill:#1a1a19}.primary{fill:#f0efec}.secondary{fill:#c3c2b7}.muted{fill:#898781}.grid{stroke:#2c2c2a}.baseline{stroke:#383835}
+.s0{fill:#3987e5}.s1{fill:#d95926}.s2{fill:#199e70}.s3{fill:#c98500}.s4{fill:#d55181}.s5{fill:#008300}.s6{fill:#9085e9}.s7{fill:#e66767}
+}
+</style>
+<rect class="surface" width="100%" height="100%" rx="8"/>
+<rect class="s0" x="114.0" y="14" width="10" height="10" rx="2"/><text class="secondary" x="129.0" y="23">dzdcache-server</text>
+<rect class="s4" x="248.0" y="14" width="10" height="10" rx="2"/><text class="secondary" x="263.0" y="23">redis-stack</text>
+<line class="grid" x1="114.0" y1="34" x2="114.0" y2="166"/><text class="muted tick" x="114.0" y="182" text-anchor="middle">10</text>
+<line class="grid" x1="294.7" y1="34" x2="294.7" y2="166"/><text class="muted tick" x="294.7" y="182" text-anchor="middle">100</text>
+<line class="grid" x1="475.3" y1="34" x2="475.3" y2="166"/><text class="muted tick" x="475.3" y="182" text-anchor="middle">1K</text>
+<line class="grid" x1="656.0" y1="34" x2="656.0" y2="166"/><text class="muted tick" x="656.0" y="182" text-anchor="middle">10K</text>
+<line class="baseline" x1="114.0" y1="34" x2="114.0" y2="166"/>
+<text class="muted" x="385.0" y="202" text-anchor="middle">operations per second, logarithmic scale</text>
+<text class="primary" x="102" y="59.0" text-anchor="end">1,000 people</text>
+<g><title>dzdcache-server, 1,000 people: 6,038</title><path class="s0" d="M114.0 40.0H612.4A4.0 4.0 0 0 1 616.4 44.0V50.0A4.0 4.0 0 0 1 612.4 54.0H114.0Z"/><text class="secondary value" x="622.4" y="51">6K</text></g>
+<g><title>redis-stack, 1,000 people: 3,815</title><path class="s4" d="M114.0 56.0H576.4A4.0 4.0 0 0 1 580.4 60.0V66.0A4.0 4.0 0 0 1 576.4 70.0H114.0Z"/><text class="secondary value" x="586.4" y="67">3.8K</text></g>
+<text class="primary" x="102" y="107.0" text-anchor="end">10,000 people</text>
+<g><title>dzdcache-server, 10,000 people: 1,734</title><path class="s0" d="M114.0 88.0H514.5A4.0 4.0 0 0 1 518.5 92.0V98.0A4.0 4.0 0 0 1 514.5 102.0H114.0Z"/><text class="secondary value" x="524.5" y="99">1.7K</text></g>
+<g><title>redis-stack, 10,000 people: 374</title><path class="s4" d="M114.0 104.0H394.2A4.0 4.0 0 0 1 398.2 108.0V114.0A4.0 4.0 0 0 1 394.2 118.0H114.0Z"/><text class="secondary value" x="404.2" y="115">374</text></g>
+<text class="primary" x="102" y="155.0" text-anchor="end">50,000 people</text>
+<g><title>dzdcache-server, 50,000 people: 364</title><path class="s0" d="M114.0 136.0H392.1A4.0 4.0 0 0 1 396.1 140.0V146.0A4.0 4.0 0 0 1 392.1 150.0H114.0Z"/><text class="secondary value" x="402.1" y="147">364</text></g>
+<g><title>redis-stack, 50,000 people: 68</title><path class="s4" d="M114.0 152.0H259.9A4.0 4.0 0 0 1 263.9 156.0V162.0A4.0 4.0 0 0 1 259.9 166.0H114.0Z"/><text class="secondary value" x="269.9" y="163">68</text></g>
+</svg>

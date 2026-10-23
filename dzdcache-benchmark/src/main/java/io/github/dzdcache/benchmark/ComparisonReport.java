@@ -14,6 +14,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 public final class ComparisonReport {
     private record Section(String benchmark, String title) { }
+    static final String CHARTS = "benchmark";
     static String iterations(JsonNode results) {
         if (results.isEmpty()) return "";
         JsonNode run = results.get(0);
@@ -77,8 +78,11 @@ public final class ComparisonReport {
             .append("so both pay for a network round trip and serialization on every call. ")
             .append("These are ").append(String.join(", ", outOfProcess)).append(".\n\n");
         if (!outOfProcess.isEmpty()) md.append("Docker had ").append(docker()).append(" for the out-of-process subjects.\n\n");
-        group(md, "In-process caches", inProcess, scores, sizes);
-        group(md, "Out-of-process caches", outOfProcess, scores, sizes);
+        md.append("Each chart of operations per second shows the table below it on a logarithmic scale, where equal distances are equal ratios, ")
+            .append("because the subjects differ by up to four orders of magnitude; the exact numbers and their confidence intervals are in the tables.\n\n");
+        Map<String, String> charts = new LinkedHashMap<>();
+        group(md, "In-process caches", "in-process", inProcess, scores, sizes, charts);
+        group(md, "Out-of-process caches", "out-of-process", outOfProcess, scores, sizes, charts);
 
         md.append("## Is an acknowledged write visible on another node?\n\n");
         md.append("1,000 writes through node 1, each read back on node 2 as soon as it was acknowledged.\n\n");
@@ -87,7 +91,14 @@ public final class ComparisonReport {
             md.append("| ").append(row.path("subject").asText()).append(" | ").append(where(row.path("subject").asText())).append(" | ")
                 .append(row.has("error") ? "error" : row.path("writes").asText()).append(" | ")
                 .append(row.has("error") ? row.path("error").asText() : row.path("stale").asText()).append(" |\n");
-        md.append("\n## Memory per cached person, per node\n\n| Subject | Runs | People | Bytes per person | How |\n|---|---|---:|---:|---|\n");
+        md.append("\n## Memory per cached person, per node\n\n");
+        List<Charts.Group> memory = new ArrayList<>();
+        for (JsonNode row : footprint)
+            if (row.has("bytesPerPersonPerNode"))
+                memory.add(new Charts.Group(row.path("subject").asText(), List.of(new Charts.Bar(row.path("subject").asText(), row.path("bytesPerPersonPerNode").asDouble()))));
+        chart(md, charts, "memory", "Memory per cached person, per node", "bytes per person, per node",
+            subjects, memory, false);
+        md.append("| Subject | Runs | People | Bytes per person | How |\n|---|---|---:|---:|---|\n");
         for (JsonNode row : footprint)
             md.append("| ").append(row.path("subject").asText()).append(" | ").append(where(row.path("subject").asText())).append(" | ").append(String.format(Locale.ROOT, "%,d", row.path("people").asInt()))
                 .append(" | ").append(row.has("bytesPerPersonPerNode") ? String.format(Locale.ROOT, "%,.0f", row.path("bytesPerPersonPerNode").asDouble()) : "–")
@@ -97,17 +108,29 @@ public final class ComparisonReport {
             md.append("| ").append(row.path("subject").asText()).append(" | ").append(where(row.path("subject").asText())).append(" | ").append(row.path("settings").asText()).append(" |\n");
         Files.createDirectories(output.getParent());
         Files.writeString(output, md.toString());
+        Path chartDirectory = output.resolveSibling(CHARTS);
+        Files.createDirectories(chartDirectory);
+        try (var old = Files.list(chartDirectory)) { for (Path file : old.toList()) if (file.toString().endsWith(".svg")) Files.delete(file); }
+        for (Map.Entry<String, String> chart : charts.entrySet()) Files.writeString(chartDirectory.resolve(chart.getKey() + ".svg"), chart.getValue());
         System.out.println("Wrote " + output);
     }
 
-    private static void group(StringBuilder md, String title, List<String> members, Map<String, Map<String, Map<Integer, double[]>>> scores,
-                              TreeSet<Integer> sizes) {
+    private static void group(StringBuilder md, String title, String slug, List<String> members,
+                              Map<String, Map<String, Map<Integer, double[]>>> scores, TreeSet<Integer> sizes, Map<String, String> charts) {
         if (members.isEmpty()) return;
         md.append("## ").append(title).append("\n\n### Searches\n\n");
-        for (Section section : SEARCHES) table(md, section, scores, members, sizes);
+        for (Section section : SEARCHES) table(md, section, slug, scores, members, sizes, charts);
         md.append("### Key-value, for comparison\n\n");
         md.append("dzdcache is built for the searches above. Lookups by id and writes are shown for completeness.\n\n");
-        for (Section section : KEY_VALUE) table(md, section, scores, members, sizes);
+        for (Section section : KEY_VALUE) table(md, section, slug, scores, members, sizes, charts);
+    }
+
+    private static void chart(StringBuilder md, Map<String, String> charts, String name, String title, String axis, List<String> subjects,
+                              List<Charts.Group> groups, boolean log) {
+        String svg = Charts.bars(title, axis, subjects, groups, log);
+        if (svg == null) return;
+        charts.put(name, svg);
+        md.append("![").append(title).append("](").append(CHARTS).append('/').append(name).append(".svg)\n\n");
     }
 
     private static String docker() {
@@ -123,11 +146,23 @@ public final class ComparisonReport {
 
     private static double number(JsonNode node) { return node.isNumber() ? node.asDouble() : Double.parseDouble(node.asText()); }
 
-    private static void table(StringBuilder md, Section section, Map<String, Map<String, Map<Integer, double[]>>> scores,
-                              List<String> subjects, TreeSet<Integer> sizes) {
+    private static void table(StringBuilder md, Section section, String slug, Map<String, Map<String, Map<Integer, double[]>>> scores,
+                              List<String> subjects, TreeSet<Integer> sizes, Map<String, String> charts) {
         Map<String, Map<Integer, double[]>> bySubject = scores.get(section.benchmark());
         if (bySubject == null) return;
-        md.append("#### ").append(section.title()).append("\n\n| Subject |");
+        md.append("#### ").append(section.title()).append("\n\n");
+        List<Charts.Group> groups = new ArrayList<>();
+        for (int size : sizes) {
+            List<Charts.Bar> bars = new ArrayList<>();
+            for (String subject : subjects) {
+                double[] score = bySubject.getOrDefault(subject, Map.of()).get(size);
+                if (score != null) bars.add(new Charts.Bar(subject, score[0]));
+            }
+            if (!bars.isEmpty()) groups.add(new Charts.Group(String.format(Locale.ROOT, "%,d people", size), bars));
+        }
+        String name = slug + "-" + section.benchmark().substring(section.benchmark().indexOf('.') + 1).replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase(Locale.ROOT);
+        chart(md, charts, name, section.title() + " (" + slug + ")", "operations per second, logarithmic scale", subjects, groups, true);
+        md.append("| Subject |");
         for (int size : sizes) md.append(String.format(Locale.ROOT, " %,d people |", size));
         md.append("\n|---|");
         for (int ignored : sizes) md.append("---:|");

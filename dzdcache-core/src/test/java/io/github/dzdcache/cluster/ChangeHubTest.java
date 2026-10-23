@@ -7,9 +7,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ChangeHubTest {
     private static Change put(String type, long id) {
@@ -63,5 +67,52 @@ class ChangeHubTest {
         }
         assertThat(seen).containsExactly("7-0", "7-1", "8-0");
         assertThat(ChangeHub.Position.parse("7-1")).isEqualTo(new ChangeHub.Position(7, 1));
+    }
+
+    @Test void withoutABufferNothingIsKeptButLiveSubscribersSeeEverything() throws Exception {
+        ChangeHub hub = new ChangeHub(0, new SimpleMeterRegistry());
+        List<String> seen = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(2);
+        try (ChangeHub.Subscription ignored = hub.subscribe(null, null, event -> { seen.add(event.position().toString()); done.countDown(); })) {
+            hub.publish(1, List.of(put("people", 1)));
+            hub.publish(2, List.of(put("people", 2)));
+            assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(seen).containsExactly("1-0", "2-0");
+        assertThat(hub.recent()).isEmpty();
+        assertThat(hub.latest()).isEqualTo(new ChangeHub.Position(2, 0));
+    }
+
+    @Test void withoutABufferAnOlderPositionStartsWithAResetAndTheLatestDoesNot() throws Exception {
+        ChangeHub hub = new ChangeHub(0, new SimpleMeterRegistry());
+        hub.publish(1, List.of(put("people", 1)));
+        hub.publish(2, List.of(put("people", 2)));
+        assertThat(collect(hub, new ChangeHub.Position(1, 0), 1)).containsExactly("1--1:RESET");
+        List<String> seen = new CopyOnWriteArrayList<>();
+        try (ChangeHub.Subscription ignored = hub.subscribe(new ChangeHub.Position(2, 0), null, event -> seen.add(event.position().toString()))) {
+            hub.publish(3, List.of(put("people", 3)));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (seen.isEmpty() && System.nanoTime() < deadline) Thread.sleep(10);
+        }
+        assertThat(seen).containsExactly("3-0");
+    }
+
+    @Test void aResumedSubscriberGetsTheValueAsItWasPut() throws Exception {
+        ObjectNode value = (ObjectNode) JsonMapper.builder().build().readTree(
+            "{\"id\":1,\"name\":\"Ada\",\"score\":0.1,\"big\":12345678901234567890,\"tags\":[\"a\",null],\"none\":null}");
+        value.put("exact", new java.math.BigDecimal("0.1000000000000000055511151231257827"));
+        ChangeHub hub = new ChangeHub(10, new SimpleMeterRegistry());
+        hub.publish(1, List.of(new Change("people", 1, JsonNodeFactory.instance.numberNode(1), 1, Change.Kind.PUT, value, 0)));
+        List<JsonNode> seen = new CopyOnWriteArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        try (ChangeHub.Subscription ignored = hub.subscribe(new ChangeHub.Position(0, 0), null, event -> { seen.add(event.change().value()); done.countDown(); })) {
+            assertThat(done.await(5, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(seen).containsExactly(value);
+        assertThat(hub.recent().getFirst().change().value()).isEqualTo(value);
+    }
+
+    @Test void aNegativeBufferIsRefused() {
+        assertThatThrownBy(() -> new ChangeHub(-1, new SimpleMeterRegistry())).isInstanceOf(IllegalArgumentException.class);
     }
 }

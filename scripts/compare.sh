@@ -10,6 +10,9 @@ case "${1:-}" in
     grep -q "(full run)" "$report" || { echo "Only a full run is published; $report is from another run"; exit 1; }
     grep -q "^| redis-stack" "$report" && grep -q "^| dzdcache-embedded" "$report" || { echo "The report does not cover every subject"; exit 1; }
     cp "$report" docs/BENCHMARK.md
+    mkdir -p docs/benchmark
+    find docs/benchmark -name '*.svg' -delete
+    cp "$(dirname "$report")"/benchmark/*.svg docs/benchmark/
     if ! grep -q "docs/BENCHMARK.md" README.md; then
       python3 - <<'PY'
 p = "README.md"

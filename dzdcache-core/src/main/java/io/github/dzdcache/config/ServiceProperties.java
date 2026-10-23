@@ -10,7 +10,7 @@ public class ServiceProperties {
     private int replicationPageBytes = 1024 * 1024;
     private int maxSearchResults = 10_000;
     private int maxScan = 100_000;
-    private int changesBuffer = 100_000;
+    private int changesBuffer;
     private Duration revisionRetention = Duration.ofHours(24);
     private Duration accessFlushInterval = Duration.ofSeconds(1);
     private Duration heartbeatInterval = Duration.ofMillis(200);
@@ -56,7 +56,7 @@ public class ServiceProperties {
             throw new IllegalArgumentException("revision-retention must be at least one millisecond");
         if (maxSearchResults < 1) throw new IllegalArgumentException("max-search-results must be positive");
         if (maxScan < 1) throw new IllegalArgumentException("max-scan must be positive");
-        if (changesBuffer < 1) throw new IllegalArgumentException("changes-buffer must be positive");
+        if (changesBuffer < 0) throw new IllegalArgumentException("changes-buffer cannot be negative");
         if (replicationPageBytes < 1 || (long) replicationPageBytes + maxRequestBytes > maxSnapshotBytes)
             throw new IllegalArgumentException("replication-page-bytes plus max-request-bytes must fit within max-snapshot-bytes");
         if (replicationTimeout == null || replicationTimeout.toMillis() < 1 || syncInterval == null || syncInterval.toMillis() < 1)
