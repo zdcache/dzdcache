@@ -19,13 +19,6 @@ public final class DistributedCache {
     }
 
     @SuppressWarnings("unchecked")
-    public <T, ID> ClusterCache<T, ID> cache(String name) {
-        ClusterCache<?, ?> cache = caches.get(name);
-        if (cache == null) throw new IllegalArgumentException("No cache type named " + name + " is declared");
-        return (ClusterCache<T, ID>) cache;
-    }
-
-    @SuppressWarnings("unchecked")
     public <T, ID> ClusterCache<T, ID> cache(Class<T> type, Class<ID> identityType) {
         for (ClusterCache<?, ?> cache : caches.values())
             if (cache.type().javaClass().equals(type) && cache.type().identityType().equals(identityType)) return (ClusterCache<T, ID>) cache;

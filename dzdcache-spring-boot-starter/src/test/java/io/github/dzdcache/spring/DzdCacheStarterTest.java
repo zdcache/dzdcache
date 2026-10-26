@@ -37,11 +37,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class DzdCacheStarterTest {
     public record Student(long id, String name, String city, int age) { }
     public record Course(String code, String title) { }
+    static final String STUDENTS = CacheType.nameOf(Student.class);
+    static final String COURSES = CacheType.nameOf(Course.class);
 
     @SpringBootConfiguration @EnableAutoConfiguration
     static class Students {
         @Bean CacheType<Student, Long> students() {
-            return CacheType.of("students", 1, Long.class, SearchSpecification.builder(IdentityDimension.of(Student.class, "id", Student::id))
+            return CacheType.of(Student.class, 1, Long.class, SearchSpecification.builder(IdentityDimension.of(Student.class, "id", Student::id))
                 .exact(Student::city).prefix(Student::name).range(Student::age).build()).capacity(2);
         }
     }
@@ -49,7 +51,7 @@ class DzdCacheStarterTest {
     @SpringBootConfiguration @Import(Students.class)
     static class StudentsAndCourses {
         @Bean CacheType<Course, String> courses() {
-            return CacheType.of("courses", 1, String.class,
+            return CacheType.of(Course.class, 1, String.class,
                 SearchSpecification.builder(IdentityDimension.of(Course.class, "code", Course::code)).prefix(Course::title).build());
         }
     }
@@ -110,12 +112,12 @@ class DzdCacheStarterTest {
     }
     private static ClusterCoordinator cluster(ConfigurableApplicationContext node) { return node.getBean(ClusterCoordinator.class); }
     private static String fingerprint(ConfigurableApplicationContext node) {
-        return node.getBean(EngineHolder.class).engine().fingerprint("students", 1);
+        return node.getBean(EngineHolder.class).engine().fingerprint(STUDENTS, 1);
     }
 
     @Test void instancesOfAServiceShareItsObjectsSearchesAndEvictions() throws Exception {
         var started = start(Students.class, Students.class, Students.class);
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         var a = students(started.get(0));
         var c = students(started.get(2));
         assertThat(a.put(new Student(1, "Anna", "Oslo", 22))).isEqualTo(1);
@@ -127,7 +129,7 @@ class DzdCacheStarterTest {
 
         a.put(new Student(3, "Berit", "Oslo", 40));
         await(() -> started.stream().map(DzdCacheStarterTest::fingerprint).distinct().count() == 1);
-        assertThat(started).allSatisfy(node -> assertThat(node.getBean(EngineHolder.class).engine().entryCount("students", 1)).isEqualTo(2));
+        assertThat(started).allSatisfy(node -> assertThat(node.getBean(EngineHolder.class).engine().entryCount(STUDENTS, 1)).isEqualTo(2));
         assertThat(a.invalidate(3L)).isEqualTo(2);
         await(() -> started.stream().allMatch(node -> students(node).get(3L) == null));
     }
@@ -164,7 +166,7 @@ class DzdCacheStarterTest {
     @Test void instancesFormAClusterOverMutualTlsFromAnSslBundle() throws Exception {
         var started = start("https", TLS, Students.class, Students.class, Students.class);
         assertThat(started).allSatisfy(node -> assertThat(cluster(node).self().url().getScheme()).isEqualTo("https"));
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         assertThat(students(started.get(0)).put(new Student(1, "Anna", "Oslo", 22))).isEqualTo(1);
         await(() -> {
             try { return new Student(1, "Anna", "Oslo", 22).equals(students(started.get(2)).get(1L)); }
@@ -254,7 +256,7 @@ class DzdCacheStarterTest {
         ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
             .findFirst().orElseThrow();
         List<ConfigurableApplicationContext> others = started.stream().filter(node -> node != master).toList();
-        await(() -> others.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> others.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         students(others.get(0)).put(new Student(1, "Anna", "Oslo", 22));
         master.close();
         await(() -> others.stream().anyMatch(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER));
@@ -265,7 +267,7 @@ class DzdCacheStarterTest {
 
     @Test void aPartitionedMasterStopsServingAndTheOthersServeEveryAcknowledgedWrite() throws Exception {
         var started = start(PartitionableStudents.class, PartitionableStudents.class, PartitionableStudents.class);
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
             .findFirst().orElseThrow();
         List<ConfigurableApplicationContext> others = started.stream().filter(node -> node != master).toList();
@@ -289,7 +291,7 @@ class DzdCacheStarterTest {
 
     @Test void readsDuringAFailoverWaitForTheNewMasterInsteadOfFailing() throws Exception {
         var started = start(PartitionableStudents.class, PartitionableStudents.class, PartitionableStudents.class);
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
             .findFirst().orElseThrow();
         ConfigurableApplicationContext reader = started.stream().filter(node -> node != master).findFirst().orElseThrow();
@@ -310,7 +312,7 @@ class DzdCacheStarterTest {
 
     @Test void aClusterGrowsAndShrinksLiveAndKeepsItsData() throws Exception {
         var started = start(Students.class, Students.class);
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         students(started.get(0)).put(new Student(1, "Anna", "Oslo", 22));
         int port;
         try (var socket = new ServerSocket(0)) { port = socket.getLocalPort(); }
@@ -353,7 +355,7 @@ class DzdCacheStarterTest {
         assertThat(witness.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("role", "WITNESS");
         var started = start("http", List.of("--dzdcache.witness-url=http://localhost:" + witnessPort),
             PartitionableStudents.class, PartitionableStudents.class);
-        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains("students", 1)));
+        await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().contains(STUDENTS, 1)));
         ConfigurableApplicationContext master = started.stream().filter(node -> cluster(node).role() == ClusterCoordinator.Role.MASTER)
             .findFirst().orElseThrow();
         ConfigurableApplicationContext other = started.stream().filter(node -> node != master).findFirst().orElseThrow();
@@ -376,8 +378,8 @@ class DzdCacheStarterTest {
     @Test void aTypeOnlySomeInstancesDeclareIsUnavailableOnTheOthers() throws Exception {
         var started = start(StudentsAndCourses.class, Students.class, Students.class);
         await(() -> started.stream().allMatch(node -> node.getBean(EngineHolder.class).engine().descriptors().size() == 2));
-        assertThat(started.get(1).getBean(EngineHolder.class).engine().unavailableTypes()).containsExactly("courses/1");
-        ClusterCache<Course, String> courses = started.get(0).getBean(DistributedCache.class).cache("courses");
+        assertThat(started.get(1).getBean(EngineHolder.class).engine().unavailableTypes()).containsExactly(COURSES + "/1");
+        ClusterCache<Course, String> courses = started.get(0).getBean(DistributedCache.class).cache(Course.class, String.class);
         assertThat(cluster(started.get(0)).role()).as("the first node founds the cluster").isEqualTo(ClusterCoordinator.Role.MASTER);
         assertThat(courses.put(new Course("CS101", "Introduction"))).isEqualTo(1);
         assertThat(courses.get("CS101")).isEqualTo(new Course("CS101", "Introduction"));
@@ -385,6 +387,6 @@ class DzdCacheStarterTest {
         var students = students(started.get(1));
         await(() -> cluster(started.get(1)).role() == ClusterCoordinator.Role.MASTER || cluster(started.get(2)).role() == ClusterCoordinator.Role.MASTER);
         assertThat(students.put(new Student(1, "Anna", "Oslo", 22))).isEqualTo(1);
-        assertThatThrownBy(() -> started.get(1).getBean(DistributedCache.class).cache("courses")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> started.get(1).getBean(DistributedCache.class).cache(Course.class, String.class)).isInstanceOf(IllegalArgumentException.class);
     }
 }

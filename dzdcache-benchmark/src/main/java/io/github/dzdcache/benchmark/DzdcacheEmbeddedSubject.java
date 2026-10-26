@@ -32,7 +32,7 @@ public final class DzdcacheEmbeddedSubject implements DistributedSubject, TimedW
     @SpringBootConfiguration @EnableAutoConfiguration
     public static class Node {
         @Bean CacheType<Person, Long> people(@Value("${benchmark.capacity}") int capacity) {
-            return CacheType.of("people", 1, Long.class, specification()).capacity(capacity);
+            return CacheType.of(Person.class, 1, Long.class, specification()).capacity(capacity);
         }
         @Bean MeterRegistry meters() { return new SimpleMeterRegistry(); }
         @Bean @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty("benchmark.disk")
