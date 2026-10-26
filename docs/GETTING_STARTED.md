@@ -68,7 +68,7 @@ class StudentDirectory {
     void save(Student student) { students.put(student); }
     Student find(long id) { return students.get(id); }
     List<Student> livingIn(String city) { return students.search(Student::city, city); }
-    List<Student> aged(int from, int to) { return students.search("age", ValueRange.between(from, to)); }
+    List<Student> aged(int from, int to) { return students.search(Student::age, ValueRange.between(from, to)); }
     void forget(long id) { students.invalidate(id); }
 }
 ```
