@@ -40,7 +40,7 @@
     line-height: 1.6;
   }
   header {
-    display: flex; gap: 20px; align-items: center;
+    display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center;
     padding: 14px 32px; border-bottom: 1px solid var(--border); font-size: 14px;
   }
   header .name { font-weight: 600; color: var(--text-primary); }
@@ -68,6 +68,8 @@
 <header>
   <span class="name">DZDCache</span>
   <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>README</a>
+  <a href="{{ '/getting-started/' | relative_url }}"{% if page.url == '/getting-started/' %} aria-current="page"{% endif %}>Getting started</a>
+  <a href="{{ '/configuration/' | relative_url }}"{% if page.url == '/configuration/' %} aria-current="page"{% endif %}>Configuration</a>
   <a href="{{ '/changelog/' | relative_url }}"{% if page.url == '/changelog/' %} aria-current="page"{% endif %}>Changelog</a>
   {% if site.benchmark %}<a href="{{ '/benchmark/' | relative_url }}"{% if page.url == '/benchmark/' %} aria-current="page"{% endif %}>Benchmark report</a>{% endif %}
   <a href="https://github.com/{{ site.github.repository_nwo | default: 'zdcache/dzdcache' }}">GitHub</a>

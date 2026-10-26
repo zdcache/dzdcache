@@ -13,4 +13,5 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
       - run: ./gradlew build
+      - run: python3 -m unittest discover -s scripts/site
       - run: bash scripts/smoke-test.sh
