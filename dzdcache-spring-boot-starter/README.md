@@ -27,7 +27,7 @@ public record Student(long id, String name, String city, int age) { }
 
 @Bean
 CacheType<Student, Long> students() {
-    return CacheType.of("students", 1, Long.class,
+    return CacheType.of(Student.class, 1, Long.class,
             SearchSpecification.builder(IdentityDimension.of(Student.class, "id", Student::id))
                 .exact(Student::city).prefix(Student::name).range(Student::age).build())
         .capacity(10_000)
