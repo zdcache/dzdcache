@@ -14,6 +14,8 @@ This is an initial implementation. Reads are fresh on any node, with one excepti
 
 ## Three ways to use it
 
+[Getting started](docs/GETTING_STARTED.md) shows the code for each, and [Configuration](docs/CONFIGURATION.md) the settings and why you would choose them.
+
 | | Embedded | Server cluster | Server cluster with a learner |
 | --- | --- | --- | --- |
 | Where the cache runs | Inside each instance of your Spring Boot service | In its own containers, which many services share | In the server containers, with a full copy inside your Spring Boot service |
