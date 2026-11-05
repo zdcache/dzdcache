@@ -77,4 +77,11 @@ class WebSocketClusterTest {
                 .hasMessageContaining("every node must use the same dzdcache.cluster-transport");
         }
     }
+
+    @Test void withWebSocketsTheOtherNodesReachANodeOnItsWebPort() throws Exception {
+        int[] ports = freePorts(2);
+        try (ConfigurableApplicationContext app = node(ports[0], ports[1], "--dzdcache.cluster-transport=websocket", "--dzdcache.discovery.pod-ip=127.0.0.1")) {
+            assertThat(app.getBean(io.github.dzdcache.cluster.ClusterCoordinator.class).self().url()).isEqualTo(URI.create("http://127.0.0.1:" + ports[0]));
+        }
+    }
 }

@@ -34,4 +34,9 @@ class ClusterSizeTest {
         assertThatThrownBy(() -> DzdCacheAutoConfiguration.clusterSize(discovery("kubernetes"), 0)).hasMessageContaining("replicas");
         assertThat(DzdCacheAutoConfiguration.clusterSize(discovery("kubernetes"), 3)).isEqualTo(3);
     }
+
+    @Test void dnsModeRequiresTheReplicaCount() {
+        assertThatThrownBy(() -> DzdCacheAutoConfiguration.clusterSize(discovery("dns"), 0)).hasMessageContaining("dns mode", "replicas");
+        assertThat(DzdCacheAutoConfiguration.clusterSize(discovery("dns"), 3)).isEqualTo(3);
+    }
 }

@@ -229,6 +229,35 @@ class DzdCacheStarterTest {
             .hasStackTraceContaining("dzdcache.cluster-transport is websocket, but this application runs no servlet web server with WebSocket support");
     }
 
+    private static URI advertised(String... settings) {
+        List<String> args = new ArrayList<>(List.of("--dzdcache.discovery.mode=dns", "--dzdcache.cluster-size=3", "--dzdcache.discovery.pod-ip=10.1.2.3",
+            "--dzdcache.cluster-token=secret", "--logging.level.root=OFF", "--spring.main.banner-mode=off"));
+        args.addAll(List.of(settings));
+        try (ConfigurableApplicationContext node = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new))) {
+            assertThat(node.getBean(io.github.dzdcache.discovery.PeerDirectory.class)).isInstanceOf(io.github.dzdcache.discovery.DnsPeerDirectory.class);
+            return cluster(node).self().url();
+        }
+    }
+
+    @Test void nodesAreReachedOnTheClusterPortUnlessAnotherPeerPortIsSet() throws Exception {
+        int clusterPort;
+        try (var socket = new ServerSocket(0)) { clusterPort = socket.getLocalPort(); }
+        assertThat(advertised("--dzdcache.cluster-port=" + clusterPort)).isEqualTo(URI.create("http://10.1.2.3:" + clusterPort));
+        assertThat(advertised("--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.peer-port=7443"))
+            .isEqualTo(URI.create("http://10.1.2.3:7443"));
+    }
+
+    @Test void aStoppedInstanceLeavesItsSlotAndDoesNotRejoinOnTheWayOut() throws Exception {
+        var started = start(Students.class, Students.class, Students.class);
+        ConfigurableApplicationContext stopping = started.get(2);
+        String id = cluster(stopping).self().id();
+        stopping.close();
+        await(() -> cluster(started.get(0)).view().members().stream().noneMatch(member -> member.id().equals(id)));
+        Thread.sleep(1_500);
+        assertThat(cluster(started.get(0)).view().members()).extracting(Member::id).containsExactlyInAnyOrder("node-0", "node-1");
+        assertThat(cluster(started.get(0)).view().learners()).isEmpty();
+    }
+
     @Test void anUnknownClusterTransportIsRefused() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=quic", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
@@ -324,11 +353,13 @@ class DzdCacheStarterTest {
             args.add("--dzdcache.discovery.static-peers[" + peer++ + "]=http://localhost:" + node.getBean(ServiceProperties.class).getClusterPort());
         ConfigurableApplicationContext third = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(args.toArray(String[]::new));
         nodes.add(third);
-        await(() -> cluster(third).startupProblem() != null);
-        assertThat(cluster(third).startupProblem()).contains("2 members", "resize the cluster first");
+        await(() -> third.getBean(DistributedCache.class).current());
+        assertThat(cluster(third).learner()).as("a node beyond the size follows as a learner").isTrue();
+        assertThat(cluster(third).startupProblem()).isNull();
+        assertThat(cluster(started.get(0)).view().members()).hasSize(2);
 
         started.get(1).getBean(DistributedCache.class).resize(3);
-        await(() -> third.getBean(DistributedCache.class).current());
+        await(() -> !cluster(third).learner() && third.getBean(DistributedCache.class).current());
         assertThat(cluster(started.get(0)).view().size()).isEqualTo(3);
         assertThat(cluster(started.get(0)).view().members()).hasSize(3);
         assertThat(students(third).get(1L)).isEqualTo(new Student(1, "Anna", "Oslo", 22));
@@ -336,7 +367,7 @@ class DzdCacheStarterTest {
         assertThat(cluster(started.get(0)).sizeWarning()).contains("cluster-size is 2", "has 3");
 
         third.getBean(DistributedCache.class).resize(2, "node-x");
-        await(() -> !third.getBean(DistributedCache.class).ready());
+        await(() -> cluster(third).learner());
         assertThat(cluster(started.get(0)).view().size()).isEqualTo(2);
         assertThat(cluster(started.get(0)).view().members()).extracting(Member::id).containsExactlyInAnyOrder("node-0", "node-1");
         assertThat(students(started.get(1)).put(new Student(2, "Berit", "Bergen", 30))).isEqualTo(1);

@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dzdcache
+spec:
+  selector:
+    app: dzdcache
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dzdcache-peers
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: dzdcache
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dzdcache
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dzdcache
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dzdcache
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: dzdcache
+  template:
+    metadata:
+      labels:
+        app: dzdcache
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dzdcache
+          image: dzdcache:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: DZDCACHE_DISCOVERY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DZDCACHE_DISCOVERY_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: DZDCACHE_CLUSTER_SIZE
+              value: "3"
+            - name: DZDCACHE_DISCOVERY_MODE
+              value: dns
+            - name: DZDCACHE_DISCOVERY_SERVICE_NAME
+              value: dzdcache-peers
+            - name: DZDCACHE_CLUSTER_TRANSPORT
+              value: websocket
+            - name: DZDCACHE_MAX_STALENESS
+              value: 5s
+            - name: DZDCACHE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dzdcache-auth
+                  key: api-token
+            - name: DZDCACHE_CLUSTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dzdcache-auth
+                  key: cluster-token
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 2
+            failureThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: temporary
+              mountPath: /tmp
+      volumes:
+        - name: temporary
+          emptyDir:
+            sizeLimit: 128Mi

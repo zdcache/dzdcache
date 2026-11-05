@@ -14,11 +14,12 @@ public class DiscoveryProperties {
     private List<URI> staticPeers = List.of();
     private String namespace = "default";
     private String serviceName = "dzdcache-peers";
+    private String dnsName;
     private String podUid = System.getenv().getOrDefault("POD_UID", "");
     private String podIp = System.getenv().getOrDefault("POD_IP", "");
     private URI apiServer = URI.create("https://kubernetes.default.svc");
     private Path serviceAccountDirectory = Path.of("/var/run/secrets/kubernetes.io/serviceaccount");
-    private int peerPort = 7070;
+    private Integer peerPort;
     private Duration retryDelay = Duration.ofSeconds(1);
     private String scheme = "http";
     public URI advertisedUrl() { return podIp.isBlank() ? selfUrl : URI.create(scheme + "://" + (podIp.contains(":") ? "[" + podIp + "]" : podIp) + ":" + peerPort); }
@@ -36,7 +37,10 @@ public class DiscoveryProperties {
     public String getPodIp() { return podIp; } public void setPodIp(String v) { podIp = v; }
     public URI getApiServer() { return apiServer; } public void setApiServer(URI v) { apiServer = v; }
     public Path getServiceAccountDirectory() { return serviceAccountDirectory; } public void setServiceAccountDirectory(Path v) { serviceAccountDirectory = v; }
-    public int getPeerPort() { return peerPort; } public void setPeerPort(int v) { peerPort = v; }
+    public int getPeerPort() { return peerPort == null ? 7070 : peerPort; } public void setPeerPort(int v) { peerPort = v; }
+    public boolean hasPeerPort() { return peerPort != null; }
+    public String getDnsName() { return dnsName == null || dnsName.isBlank() ? serviceName + "." + namespace + ".svc.cluster.local" : dnsName; }
+    public void setDnsName(String v) { dnsName = v; }
     public void requireScheme(URI uri, String setting) {
         if (!scheme.equals(uri.getScheme()))
             throw new IllegalArgumentException(setting + " " + uri + " must use " + scheme + ":// because dzdcache.cluster-tls.enabled is "
