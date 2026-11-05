@@ -140,6 +140,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private volatile long commitIndex;
     private volatile long appliedIndex;
     private volatile boolean closed;
+    private volatile boolean leaving;
     private volatile String startupProblem;
     private volatile boolean bootstrapping;
     private final Object currency = new Object();
@@ -246,11 +247,14 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     public boolean ready() {
-        return installed && !recovering && role != Role.STARTING && (learner ? learners.contains(self) : members.contains(self) && config().includes(self));
+        return installed && !recovering && role != Role.STARTING
+            && (learner || standby() ? learners.contains(self) : members.contains(self) && config().includes(self));
     }
-    public boolean learner() { return learner; }
+    public boolean learner() { return learner || standby(); }
     public List<Member> learners() { return learners; }
-    private boolean listed() { return learner ? learners.contains(self) : members.contains(self); }
+    private boolean standby() { return !learner && !members.contains(self) && learners.contains(self); }
+    private boolean listed() { return learner ? learners.contains(self) : members.contains(self) || learners.contains(self); }
+    private boolean votes() { return !learner && members.contains(self); }
     public Role role() { return role; }
     public long term() { return term; }
     public Member self() { return self; }
@@ -398,6 +402,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     public void leave() {
+        leaving = true;
         CompletableFuture<Void> left = onLoop(() -> {
             if (role == Role.MASTER && members.size() > 1) {
                 List<Member> others = without(members, self.id());
@@ -638,7 +643,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         switch (role) {
             case STARTING -> { if (now >= nextDiscovery) discover(now); }
             case FOLLOWER, CANDIDATE -> {
-                if (!listed() && master != null && install == null && now >= nextDiscovery) {
+                if ((learner ? !listed() : !votes()) && master != null && install == null && now >= nextDiscovery) {
                     nextDiscovery = now + DISCOVERY_RETRY * 2;
                     join(master);
                 }
@@ -749,7 +754,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 master = current;
                 lastMasterContact = timers.now();
                 electionDeadline = Long.MAX_VALUE;
-            } else if (reply instanceof Message.Refused refused && refused.status() == 409) problem(refused.message());
+            } else if (reply instanceof Message.Refused refused && refused.status() == 409 && !listed()) problem(refused.message());
         }, error -> { });
     }
 
@@ -1241,10 +1246,10 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         boolean is = listed();
         if (role == Role.MASTER && !is && !config().includes(self)) {
             stepDown(term);
-            if (!closed) restartMembership(timers.now());
+            if (!closed && !leaving) restartMembership(timers.now());
             return;
         }
-        if (was && !is && !closed) restartMembership(timers.now());
+        if (was && !is && !closed && !leaving) restartMembership(timers.now());
         else if (is && role == Role.FOLLOWER && master != null && !members.contains(master)) {
             master = null;
             electionDeadline = timers.now();
@@ -1337,9 +1342,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         if (join.learner()) return onLearnerJoin(joining, current);
         Optional<Member> existing = current.members().stream().filter(member -> member.id().equals(joining.id())).findFirst();
         if (existing.isPresent() && existing.get().equals(joining)) return CompletableFuture.completedFuture(new Message.Ack());
-        if (existing.isEmpty() && current.members().size() >= current.size())
-            return CompletableFuture.completedFuture(new Message.Refused(409, "The cluster already has its " + current.size()
-                + " members, and " + joining.id() + " is not one of them; resize the cluster first"));
+        if (existing.isEmpty() && current.members().size() >= current.size()) return onJoinWhenFull(joining, current);
         return changeMembership(list -> {
             List<Member> next = new ArrayList<>();
             boolean replaced = false;
@@ -1350,11 +1353,31 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             if (!replaced) next.add(joining);
             return List.copyOf(next);
         }).handle((done, error) -> {
-            if (error == null) return new Message.Ack();
+            if (error == null) return CompletableFuture.<Message>completedFuture(new Message.Ack());
             Throwable cause = error instanceof java.util.concurrent.CompletionException ? error.getCause() : error;
-            return cause instanceof CacheException refused && refused.status() == 409 ? new Message.Refused(409, refused.getMessage())
-                : new Message.Refused(503, "Join did not commit");
-        });
+            return cause instanceof CacheException refused && refused.status() == 409 ? onLearnerJoin(joining, config())
+                : CompletableFuture.<Message>completedFuture(new Message.Refused(503, "Join did not commit"));
+        }).thenCompose(answer -> answer);
+    }
+
+    private CompletableFuture<Message> onJoinWhenFull(Member joining, Config current) {
+        Optional<Member> silent = silentMember(current);
+        if (silent.isEmpty()) return onLearnerJoin(joining, current);
+        if (changeInFlight || !changes.isEmpty()) return CompletableFuture.completedFuture(new Message.Refused(503, "A membership change is in progress"));
+        String replaced = silent.get().id();
+        LOG.info("{} replaces {}, silent for more than {}, with {}", self.id(), replaced, properties.getMemberTimeout(), joining.id());
+        return changeMembership(list -> list.stream().map(member -> member.id().equals(replaced) ? joining : member).toList(), current.size())
+            .handle((done, error) -> error == null ? new Message.Ack() : new Message.Refused(503, "Replacing " + replaced + " did not commit"));
+    }
+
+    private Optional<Member> silentMember(Config current) {
+        if (current.joint() || current.size() < 3) return Optional.empty();
+        long now = timers.now();
+        long timeout = properties.getMemberTimeout().toMillis();
+        return current.members().stream()
+            .filter(member -> !member.id().equals(self.id()) && !inSync.contains(member.id()))
+            .filter(member -> progress.containsKey(member.id()) && now - progress.get(member.id()).lastAck > timeout)
+            .min(Comparator.comparingLong(member -> progress.get(member.id()).lastAck));
     }
 
     private CompletableFuture<Message> onLearnerJoin(Member joining, Config current) {
@@ -1440,7 +1463,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     private Message onVote(Message.Vote request) {
-        if (learner) return new Message.Voted(term, false, true, clusterId);
+        if (learner || standby()) return new Message.Voted(term, false, true, clusterId);
         long now = timers.now();
         if (role == Role.STARTING) return substituteVote(request, now);
         boolean member = !installed || configs.isEmpty() || members.contains(request.candidate()) || config().includes(request.candidate());

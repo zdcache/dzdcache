@@ -443,8 +443,8 @@ class ClusterSimulationTest {
         for (SimulatedCluster.Node node : cluster.live()) assertThat(cluster.read(node, 3)).isEqualTo(1L);
 
         resize(cluster, "e", 3, "d", "e");
-        assertThat(cluster.runUntil(() -> !cluster.nodes.get("d").coordinator.ready() && !cluster.nodes.get("e").coordinator.ready()
-            && cluster.nodes.get("d").coordinator.startupProblem() != null, 20_000)).isTrue();
+        assertThat(cluster.runUntil(() -> cluster.nodes.get("d").coordinator.learner() && cluster.nodes.get("e").coordinator.learner(), 20_000))
+            .as("removed nodes that keep running follow as learners").isTrue();
         assertThat(a.coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c");
         assertThat(status(cluster.await(tracked(cluster, "c", 11, 1), 5_000))).isEqualTo(200);
         assertThat(settled(cluster, 3)).isTrue();
@@ -695,7 +695,7 @@ class ClusterSimulationTest {
         for (SimulatedCluster.Node node : cluster.live()) assertThat(held(node)).as(node.id).containsExactly(1L, 3L);
     }
 
-    @Test void silentMembersKeepTheirSlotsAndOnlyTheConfiguredNodesCanJoin() {
+    @Test void silentMembersKeepTheirSlotsUntilANodeWithANewIdNeedsOne() {
         SimulatedCluster cluster = new SimulatedCluster(9);
         TypeDescriptor students = cluster.students(1_000);
         SimulatedCluster.Node a = started(cluster, "a", "b", "c", "d");
@@ -707,16 +707,135 @@ class ClusterSimulationTest {
         assertThat(status(cluster.await(a.coordinator.putAsync(List.of(put(cluster, 1, "N", 1))), 5_000)))
             .as("half of the configured size including the oldest").isEqualTo(200);
 
-        SimulatedCluster.Node replacement = cluster.start("c");
-        assertThat(cluster.runUntil(replacement.coordinator::ready, 20_000)).isTrue();
-        assertThat(a.coordinator.members()).hasSize(4).contains(replacement.coordinator.self());
-        assertThat(revisions(replacement)).containsEntry(1L, 1L);
+        SimulatedCluster.Node restarted = cluster.start("c");
+        assertThat(cluster.runUntil(restarted.coordinator::ready, 20_000)).isTrue();
+        assertThat(a.coordinator.members()).hasSize(4).contains(restarted.coordinator.self());
+        assertThat(revisions(restarted)).containsEntry(1L, 1L);
 
-        SimulatedCluster.Node stranger = cluster.start("e");
-        assertThat(cluster.runUntil(() -> stranger.coordinator.startupProblem() != null, 20_000)).isTrue();
-        assertThat(stranger.coordinator.startupProblem()).contains("4 members", "resize the cluster first");
-        assertThat(stranger.coordinator.ready()).isFalse();
-        assertThat(a.coordinator.members()).extracting(Member::id).doesNotContain("e");
+        SimulatedCluster.Node replacement = cluster.start("e");
+        assertThat(cluster.runUntil(() -> replacement.coordinator.ready() && !replacement.coordinator.learner(), 20_000)).isTrue();
+        assertThat(a.coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c", "e");
+        assertThat(a.coordinator.view().size()).isEqualTo(4);
+        assertThat(revisions(replacement)).containsEntry(1L, 1L);
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aNodeThatFindsTheClusterFullServesAsALearnerAndTakesTheFirstSlotThatFrees() {
+        SimulatedCluster cluster = new SimulatedCluster(51);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        tracked(cluster, "a", 1, 1);
+        SimulatedCluster.Node surplus = cluster.start("d");
+        assertThat(cluster.runUntil(surplus.coordinator::current, 20_000)).as("the surplus node serves fresh reads").isTrue();
+        assertThat(surplus.coordinator.learner()).isTrue();
+        assertThat(surplus.coordinator.startupProblem()).isNull();
+        assertThat(learns(master(cluster), "d")).isTrue();
+        assertThat(a.coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "c");
+        assertThat(cluster.read(surplus, 1)).isEqualTo(1L);
+        cluster.run(30_000);
+        assertThat(learns(master(cluster), "d")).as("live members keep their slots").isTrue();
+
+        SimulatedCluster.Node leaving = cluster.nodes.get("b");
+        CompletableFuture<Message> left = master(cluster).coordinator.handle(new Message.Leave(leaving.coordinator.self()));
+        cluster.crash("b");
+        assertThat(cluster.await(left, 5_000)).isInstanceOf(Message.Ack.class);
+        assertThat(cluster.runUntil(() -> !surplus.coordinator.learner() && surplus.coordinator.ready(), 10_000)).isTrue();
+        SimulatedCluster.Node now = master(cluster);
+        assertThat(now.coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "c", "d");
+        assertThat(now.coordinator.view().learners()).isEmpty();
+        assertThat(status(cluster.await(tracked(cluster, "d", 2, 1), 5_000))).isEqualTo(200);
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(cluster.violations).isEmpty();
+        assertIdentical(cluster);
+    }
+
+    @Test void aLearnerWaitingForASlotTakesTheSlotOfAMemberSilentForTheMemberTimeout() {
+        SimulatedCluster cluster = new SimulatedCluster(52);
+        TypeDescriptor students = cluster.students(1_000);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        cluster.await(a.coordinator.publishAsync(students), 5_000);
+        SimulatedCluster.Node surplus = cluster.start("d");
+        assertThat(cluster.runUntil(surplus.coordinator::ready, 20_000)).isTrue();
+        cluster.crash("c");
+        long crashedAt = cluster.now();
+        assertThat(cluster.runUntil(() -> !surplus.coordinator.learner(), 30_000)).isTrue();
+        assertThat(cluster.now() - crashedAt).as("time before a silent member is replaced")
+            .isGreaterThan(cluster.properties.getMemberTimeout().toMillis());
+        assertThat(cluster.runUntil(() -> master(cluster).coordinator.view().previousSize() == null, 10_000)).isTrue();
+        assertThat(master(cluster).coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b", "d");
+
+        cluster.crash("b");
+        SimulatedCluster.Node remaining = master(cluster);
+        assertThat(status(cluster.await(tracked(cluster, remaining.id, 1, 1), 5_000)))
+            .as("two of the three members, one of them the replacement").isEqualTo(200);
+        assertThat(cluster.staleReads).isEmpty();
+        assertThat(cluster.violations).isEmpty();
+    }
+
+    @Test void aPairNeverGivesAwayTheSlotOfItsSilentNode() {
+        SimulatedCluster cluster = new SimulatedCluster(53);
+        SimulatedCluster.Node a = started(cluster, "a", "b");
+        cluster.crash("b");
+        cluster.run(30_000);
+        SimulatedCluster.Node c = cluster.start("c");
+        assertThat(cluster.runUntil(c.coordinator::ready, 20_000)).isTrue();
+        cluster.run(30_000);
+        assertThat(c.coordinator.learner()).isTrue();
+        assertThat(a.coordinator.view().members()).extracting(Member::id).containsExactlyInAnyOrder("a", "b");
+    }
+
+    @Test void podsReplacedUnderNewIdsDuringFailuresNeverGiveATermTwoMastersOrAStaleRead() {
+        for (long seed = 800; seed < 806; seed++) {
+            SimulatedCluster cluster = new SimulatedCluster(seed);
+            TypeDescriptor students = cluster.students(100_000);
+            started(cluster, "p0", "p1", "p2");
+            cluster.await(cluster.nodes.get("p0").coordinator.publishAsync(students), 5_000);
+            Random random = new Random(seed);
+            long[] revision = new long[20];
+            int next = 3;
+            boolean isolated = false;
+            for (int step = 0; step < 200; step++) {
+                List<SimulatedCluster.Node> live = cluster.live();
+                int action = random.nextInt(100);
+                if (action < 6 && settledWithLivePods(cluster)) {
+                    SimulatedCluster.Node victim = live.get(random.nextInt(live.size()));
+                    if (random.nextBoolean()) {
+                        SimulatedCluster.Node master = cluster.mastersNow().stream().findFirst().orElse(null);
+                        if (master != null) cluster.await(master.coordinator.handle(new Message.Leave(victim.coordinator.self())), 2_000);
+                    }
+                    cluster.crash(victim.id);
+                    cluster.start("p" + next++);
+                } else if (action < 9 && !isolated) {
+                    cluster.isolate(live.get(random.nextInt(live.size())).id);
+                    isolated = true;
+                } else if (action < 13 && isolated) {
+                    cluster.heal();
+                    isolated = false;
+                } else {
+                    long id = random.nextInt(20);
+                    tracked(cluster, live.get(random.nextInt(live.size())).id, id, ++revision[(int) id]);
+                }
+                for (SimulatedCluster.Node node : cluster.live()) cluster.read(node, random.nextInt(20));
+                cluster.run(random.nextInt(800));
+            }
+            cluster.heal();
+            String label = "seed " + seed;
+            assertThat(cluster.runUntil(() -> settledWithLivePods(cluster), 60_000))
+                .as(label + ": the live pods hold every slot").isTrue();
+            assertThat(cluster.violations).as(label).isEmpty();
+            assertThat(cluster.staleReads).as(label).isEmpty();
+            assertThat(cluster.mastersNow().getFirst().coordinator.view().members()).as(label).hasSize(3);
+            assertIdentical(cluster);
+        }
+    }
+
+    private static boolean settledWithLivePods(SimulatedCluster cluster) {
+        if (cluster.mastersNow().size() != 1) return false;
+        ClusterCoordinator.ClusterView view = cluster.mastersNow().getFirst().coordinator.view();
+        return view.previousMembers() == null && view.members().size() == view.size()
+            && view.members().stream().allMatch(member -> cluster.nodes.get(member.url().getHost()).alive)
+            && cluster.live().stream().allMatch(node -> node.coordinator.current());
     }
 
     @Test void anIsolatedFollowerStopsServingWithinOneLeaseWhileTheOthersSeeEveryAcknowledgedWrite() {

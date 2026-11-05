@@ -75,14 +75,25 @@ public class DzdCacheAutoConfiguration {
     }
 
     @Bean(initMethod = "start") @ConditionalOnMissingBean
-    PeerDirectory dzdcachePeerDirectory(DiscoveryProperties discovery, ServiceProperties properties, DzdCacheMapper mapper) {
+    PeerDirectory dzdcachePeerDirectory(DiscoveryProperties discovery, ServiceProperties properties, DzdCacheMapper mapper,
+                                        ObjectProvider<Http2Cluster.Marker> http2, ObjectProvider<WebSocketCluster.Marker> websocket,
+                                        org.springframework.core.env.Environment environment) {
         if (!discovery.getMode().equals("standalone") && properties.getClusterToken().isBlank())
             throw new IllegalArgumentException("dzdcache.cluster-token is required in distributed mode");
+        if (!discovery.hasPeerPort())
+            discovery.setPeerPort(http2.getIfAvailable() == null && websocket.getIfAvailable() == null ? properties.getClusterPort() : webPort(environment));
         return switch (discovery.getMode()) {
             case "standalone", "static", "witness" -> new StaticPeerDirectory(discovery);
             case "kubernetes" -> new KubernetesPeerDirectory(discovery, mapper.mapper());
-            default -> throw new IllegalArgumentException("Discovery mode must be standalone, static, kubernetes or witness");
+            case "dns" -> new DnsPeerDirectory(discovery);
+            default -> throw new IllegalArgumentException("Discovery mode must be standalone, static, kubernetes, dns or witness");
         };
+    }
+
+    private static int webPort(org.springframework.core.env.Environment environment) {
+        int port = environment.getProperty("server.port", Integer.class, 8080);
+        if (port < 1) throw new IllegalArgumentException("server.port is " + port + ", so the other nodes cannot know it; set dzdcache.discovery.peer-port");
+        return port;
     }
 
     @Bean @ConditionalOnMissingBean
@@ -148,7 +159,7 @@ public class DzdCacheAutoConfiguration {
                 yield listed;
             }
             default -> {
-                if (configured < 1) throw new IllegalArgumentException("dzdcache.cluster-size is required in kubernetes mode; set it to the number of replicas");
+                if (configured < 1) throw new IllegalArgumentException("dzdcache.cluster-size is required in " + discovery.getMode() + " mode; set it to the number of replicas");
                 yield configured;
             }
         };
