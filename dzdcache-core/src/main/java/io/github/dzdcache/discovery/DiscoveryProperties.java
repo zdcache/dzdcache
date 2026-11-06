@@ -17,24 +17,36 @@ public class DiscoveryProperties {
     private String dnsName;
     private String podUid = System.getenv().getOrDefault("POD_UID", "");
     private String podIp = System.getenv().getOrDefault("POD_IP", "");
+    private String detectedIp;
+    private String hostname = System.getenv().getOrDefault("HOSTNAME", "");
     private URI apiServer = URI.create("https://kubernetes.default.svc");
     private Path serviceAccountDirectory = Path.of("/var/run/secrets/kubernetes.io/serviceaccount");
     private Integer peerPort;
     private Duration retryDelay = Duration.ofSeconds(1);
     private String scheme = "http";
-    public URI advertisedUrl() { return podIp.isBlank() ? selfUrl : URI.create(scheme + "://" + (podIp.contains(":") ? "[" + podIp + "]" : podIp) + ":" + peerPort); }
+    public URI advertisedUrl() {
+        String ip = getPodIp();
+        return ip.isBlank() ? selfUrl : URI.create(scheme + "://" + (ip.contains(":") ? "[" + ip + "]" : ip) + ":" + getPeerPort());
+    }
     public String getMode() { return mode; } public void setMode(String v) { mode = v; }
     public String getNodeId() {
         if (nodeId != null && !nodeId.isBlank()) return nodeId;
-        return mode.equals("static") ? selfUrl.getHost() + ":" + selfUrl.getPort() : generatedId;
+        if (mode.equals("static")) return selfUrl.getHost() + ":" + selfUrl.getPort();
+        return hostname.isBlank() ? generatedId : hostname;
     }
+    public String getHostname() { return hostname; } public void setHostname(String v) { hostname = v == null ? "" : v; }
     public void setNodeId(String v) { nodeId = v; }
     public URI getSelfUrl() { return selfUrl; } public void setSelfUrl(URI v) { selfUrl = v; }
     public List<URI> getStaticPeers() { return staticPeers; } public void setStaticPeers(List<URI> v) { staticPeers = List.copyOf(v); }
     public String getNamespace() { return namespace; } public void setNamespace(String v) { namespace = v; }
     public String getServiceName() { return serviceName; } public void setServiceName(String v) { serviceName = v; }
     public String getPodUid() { return podUid; } public void setPodUid(String v) { podUid = v; }
-    public String getPodIp() { return podIp; } public void setPodIp(String v) { podIp = v; }
+    public String getPodIp() {
+        if (!podIp.isBlank() || !(mode.equals("dns") || mode.equals("kubernetes"))) return podIp;
+        if (detectedIp == null) detectedIp = HostAddress.detect();
+        return detectedIp;
+    }
+    public void setPodIp(String v) { podIp = v == null ? "" : v; }
     public URI getApiServer() { return apiServer; } public void setApiServer(URI v) { apiServer = v; }
     public Path getServiceAccountDirectory() { return serviceAccountDirectory; } public void setServiceAccountDirectory(Path v) { serviceAccountDirectory = v; }
     public int getPeerPort() { return peerPort == null ? 7070 : peerPort; } public void setPeerPort(int v) { peerPort = v; }

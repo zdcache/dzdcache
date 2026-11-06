@@ -16,6 +16,8 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.List;
 import javax.net.ssl.SSLContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -33,6 +35,7 @@ import tools.jackson.databind.ObjectMapper;
 @ConditionalOnProperty(prefix = "dzdcache", name = "enabled", matchIfMissing = true)
 @org.springframework.context.annotation.Import({Http2Cluster.class, WebSocketCluster.class})
 public class DzdCacheAutoConfiguration {
+    private static final Logger LOG = LoggerFactory.getLogger(DzdCacheAutoConfiguration.class);
     private record Typed(CacheType<?, ?> declaration, TypeDescriptor descriptor, JacksonRootType<?, ?> type) { }
 
     @Bean @ConditionalOnMissingBean @ConfigurationProperties("dzdcache")
@@ -141,6 +144,7 @@ public class DzdCacheAutoConfiguration {
             discovery.requireScheme(properties.getWitnessUrl(), "dzdcache.witness-url");
         }
         Member self = new Member(discovery.getNodeId(), discovery.advertisedUrl(), System.currentTimeMillis());
+        if (!discovery.getMode().equals("standalone")) LOG.info("dzdcache advertises {} as node {}", self.url(), self.id());
         return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
             new SerialTimers(), new java.security.SecureRandom(), mapper.mapper(), storage.getIfAvailable(Storage::none));
     }

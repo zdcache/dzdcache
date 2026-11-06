@@ -112,9 +112,8 @@ class KubernetesPeerDirectoryTest {
             api.listResponse.set(query -> new Reply(200, page("50", "", slice("tls", 7443, endpoint("a", "10.0.0.3", "{}")))));
             DiscoveryProperties properties = properties(api);
             properties.setScheme("https");
-            org.assertj.core.api.Assertions.assertThatThrownBy(() -> new KubernetesPeerDirectory(properties, JsonMapper.builder().build()))
-                .hasMessageContaining("dzdcache.discovery.self-url http://localhost:7070 must use https://");
-            properties.setSelfUrl(URI.create("https://localhost:7443"));
+            properties.setPeerPort(7443);
+            assertThat(properties.advertisedUrl().getScheme()).as("advertised from the detected address, not the http self-url").isEqualTo("https");
             try (var directory = new KubernetesPeerDirectory(properties, JsonMapper.builder().build())) {
                 directory.start();
                 await(() -> directory.snapshot().available());

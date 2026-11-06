@@ -34,6 +34,7 @@ import org.springframework.context.annotation.Import;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class DzdCacheStarterTest {
     public record Student(long id, String name, String city, int age) { }
     public record Course(String code, String title) { }
@@ -256,6 +257,14 @@ class DzdCacheStarterTest {
         Thread.sleep(1_500);
         assertThat(cluster(started.get(0)).view().members()).extracting(Member::id).containsExactlyInAnyOrder("node-0", "node-1");
         assertThat(cluster(started.get(0)).view().learners()).isEmpty();
+    }
+
+    @Test void aNodeLogsTheAddressAndIdItAdvertises(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        int clusterPort;
+        try (var socket = new ServerSocket(0)) { clusterPort = socket.getLocalPort(); }
+        advertised("--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.hostname=pricing-engine-x2k4q",
+            "--logging.level.io.github.dzdcache.spring=INFO");
+        assertThat(output).contains("dzdcache advertises http://10.1.2.3:" + clusterPort + " as node pricing-engine-x2k4q");
     }
 
     @Test void anUnknownClusterTransportIsRefused() {

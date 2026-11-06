@@ -9,6 +9,7 @@ dependencies {
     api(project(":dzdcache-core"))
     api(libs.spring.boot.autoconfigure)
     implementation(libs.spring.boot.starter.jackson)
+    implementation(libs.slf4j.api)
     compileOnly(libs.spring.boot.health)
     compileOnly(platform(libs.spring.boot.dependencies))
     compileOnly("jakarta.servlet:jakarta.servlet-api")

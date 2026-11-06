@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.1] - 2026-11-06
+
+### Fixed
+
+- In `dns` and `kubernetes` mode, a node without `POD_IP` advertised its `self-url`, `http://localhost:7070` by default, so the nodes never found each other. It now advertises the host's own address, which is the pod's IP in Kubernetes, or the first site-local interface address when the host name resolves to loopback.
+
+### Changed
+
+- Without `dzdcache.discovery.node-id`, a node outside `static` mode takes `HOSTNAME` as its id, the pod name in Kubernetes, before a random one, so logs and slot takeovers name the pod.
+- A clustered node logs the address and id it advertises when it starts: `dzdcache advertises http://10.244.1.17:8080 as node pricing-engine-7d9f8c6b5-x2k4q`.
+
 ## [0.2.0] - 2026-11-05
 
 ### Breaking
