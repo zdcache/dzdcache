@@ -3,7 +3,6 @@ package io.github.dzdcache.server.api;
 import io.github.dzdcache.server.DzdCacheApplication;
 import io.github.dzdcache.spring.DistributedCache;
 import io.github.dzdcache.spring.JsonCache;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -30,7 +29,7 @@ class StarterLearnerTest {
     static class Reader { }
 
     @Test void aSpringBootApplicationReadsAServerClustersJsonTypesAsALearner() throws Exception {
-        int[] ports = ports(3);
+        int[] ports = Ports.free(3);
         try (HttpClient http = HttpClient.newHttpClient();
              ConfigurableApplicationContext server = new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + ports[0],
                  "--dzdcache.discovery.mode=static", "--dzdcache.discovery.node-id=server", "--dzdcache.cluster-port=" + ports[1],
@@ -71,14 +70,4 @@ class StarterLearnerTest {
         } catch (Exception e) { return -1; }
     }
 
-    private static int[] ports(int count) throws Exception {
-        ServerSocket[] sockets = new ServerSocket[count];
-        try {
-            int[] ports = new int[count];
-            for (int i = 0; i < count; i++) { sockets[i] = new ServerSocket(0); ports[i] = sockets[i].getLocalPort(); }
-            return ports;
-        } finally {
-            for (ServerSocket socket : sockets) if (socket != null) socket.close();
-        }
-    }
 }

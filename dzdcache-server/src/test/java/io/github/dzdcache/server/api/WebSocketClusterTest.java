@@ -7,7 +7,6 @@ import io.github.dzdcache.cluster.RaftSocket;
 import io.github.dzdcache.cluster.WebSocketRaftTransport;
 import io.github.dzdcache.config.ServiceProperties;
 import io.github.dzdcache.server.DzdCacheApplication;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -22,16 +21,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class WebSocketClusterTest {
     private final JsonMapper mapper = JsonMapper.builder().build();
 
-    private static int[] freePorts(int count) throws Exception {
-        ServerSocket[] sockets = new ServerSocket[count];
-        int[] ports = new int[count];
-        try {
-            for (int i = 0; i < count; i++) { sockets[i] = new ServerSocket(0); ports[i] = sockets[i].getLocalPort(); }
-        } finally {
-            for (ServerSocket socket : sockets) if (socket != null) socket.close();
-        }
-        return ports;
-    }
 
     private static ConfigurableApplicationContext node(int port, int clusterPort, String... settings) {
         String[] base = {"--server.port=" + port, "--dzdcache.cluster-port=" + clusterPort, "--dzdcache.discovery.mode=static",
@@ -51,7 +40,7 @@ class WebSocketClusterTest {
     }
 
     @Test void clusterTrafficUsesAWebSocketOnTheServersOwnPortAndRefusesAnotherEncoding() throws Exception {
-        int[] ports = freePorts(2);
+        int[] ports = Ports.free(2);
         int port = ports[0];
         try (ConfigurableApplicationContext app = node(port, ports[1], "--dzdcache.cluster-transport=websocket", "--dzdcache.cluster-encoding=smile");
              var smile = new WebSocketRaftTransport(ClusterCodec.of("smile", mapper), properties("smile"));
@@ -65,7 +54,7 @@ class WebSocketClusterTest {
     }
 
     @Test void aWebSocketNodeExplainsThatItsPeerUsesAnotherTransport() throws Exception {
-        int[] ports = freePorts(2);
+        int[] ports = Ports.free(2);
         int port = ports[0], clusterPort = ports[1];
         try (ConfigurableApplicationContext app = node(port, clusterPort, "--dzdcache.cluster-transport=tcp");
              var transport = new WebSocketRaftTransport(mapper, properties("json"))) {
@@ -79,7 +68,7 @@ class WebSocketClusterTest {
     }
 
     @Test void withWebSocketsTheOtherNodesReachANodeOnItsWebPort() throws Exception {
-        int[] ports = freePorts(2);
+        int[] ports = Ports.free(2);
         try (ConfigurableApplicationContext app = node(ports[0], ports[1], "--dzdcache.cluster-transport=websocket", "--dzdcache.discovery.pod-ip=127.0.0.1")) {
             assertThat(app.getBean(io.github.dzdcache.cluster.ClusterCoordinator.class).self().url()).isEqualTo(URI.create("http://127.0.0.1:" + ports[0]));
         }
