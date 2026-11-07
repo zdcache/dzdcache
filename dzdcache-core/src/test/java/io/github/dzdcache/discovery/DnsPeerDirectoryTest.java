@@ -8,12 +8,20 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.slf4j.LoggerFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,6 +71,45 @@ class DnsPeerDirectoryTest {
         }
     }
 
+    @Test void asksForAAndAaaaSeparatelyBecauseClusterDnsAnswersAnAnyQueryWithoutAddresses() throws Exception {
+        try (FakeDns dns = new FakeDns()) {
+            dns.records.put(NAME, List.of("10.0.0.2", "2001:db8::3"));
+            try (var directory = new DnsPeerDirectory(properties(), dns.address())) {
+                directory.start();
+                await(() -> directory.snapshot().available());
+                assertThat(directory.snapshot().peers().values()).containsExactlyInAnyOrder(
+                    URI.create("http://10.0.0.2:7070"), URI.create("http://[2001:db8::3]:7070"));
+            }
+            assertThat(dns.queried).containsExactly(FakeDns.A, FakeDns.AAAA);
+        }
+    }
+
+    @Test void anEmptyAnswerIsLoggedOncePerMinuteAndAgainAsSoonAsItReturnsAfterAddresses() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(DnsPeerDirectory.class);
+        ListAppender<ILoggingEvent> warnings = new ListAppender<>();
+        warnings.start();
+        logger.addAppender(warnings);
+        MovableClock clock = new MovableClock();
+        try (FakeDns dns = new FakeDns(); var directory = new DnsPeerDirectory(properties(), dns.address(), clock)) {
+            directory.start();
+            await(() -> clock.now.equals(directory.snapshot().discoveredAt()));
+            assertThat(warnings.list).extracting(ILoggingEvent::getFormattedMessage)
+                .containsExactly("DNS returned no A or AAAA records for " + NAME + ", so this node finds no peers");
+            discoverAt(directory, clock, clock.now.plusSeconds(59));
+            assertThat(warnings.list).hasSize(1);
+            discoverAt(directory, clock, clock.now.plusSeconds(1));
+            assertThat(warnings.list).hasSize(2);
+            dns.records.put(NAME, List.of("10.0.0.2"));
+            discoverAt(directory, clock, clock.now.plusSeconds(1));
+            assertThat(directory.snapshot().peers()).hasSize(1);
+            dns.records.remove(NAME);
+            discoverAt(directory, clock, clock.now.plusSeconds(1));
+            assertThat(warnings.list).hasSize(3);
+        } finally {
+            logger.detachAppender(warnings);
+        }
+    }
+
     @Test void theNameDefaultsToThePeerServiceInItsNamespace() {
         DiscoveryProperties properties = new DiscoveryProperties();
         properties.setServiceName("cache-peers");
@@ -88,6 +135,19 @@ class DnsPeerDirectoryTest {
         return properties;
     }
 
+    private static void discoverAt(DnsPeerDirectory directory, MovableClock clock, Instant at) throws InterruptedException {
+        clock.now = at;
+        directory.refresh();
+        await(() -> at.equals(directory.snapshot().discoveredAt()));
+    }
+
+    private static final class MovableClock extends Clock {
+        volatile Instant now = Instant.parse("2026-11-07T10:00:00Z");
+        @Override public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(java.time.ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
+    }
+
     private static void await(BooleanSupplier condition) throws InterruptedException {
         long deadline = System.nanoTime() + 10_000_000_000L;
         while (!condition.getAsBoolean()) {
@@ -97,8 +157,9 @@ class DnsPeerDirectoryTest {
     }
 
     private static final class FakeDns implements AutoCloseable {
-        private static final int A = 1, AAAA = 28, ANY = 255;
+        static final int A = 1, AAAA = 28, ANY = 255, HINFO = 13;
         final Map<String, List<String>> records = new ConcurrentHashMap<>();
+        final List<Integer> queried = new CopyOnWriteArrayList<>();
         private final DatagramSocket socket;
         private final Thread worker;
 
@@ -135,19 +196,28 @@ class DnsPeerDirectoryTest {
                 name.append(new String(label, StandardCharsets.US_ASCII));
             }
             int type = query.getShort() & 0xffff;
+            queried.add(type);
             query.getShort();
             byte[] question = new byte[query.position() - questionStart];
             query.position(questionStart);
             query.get(question);
             List<String> found = records.get(name.toString().toLowerCase());
-            List<InetAddress> addresses = found == null ? List.of() : found.stream().map(FakeDns::parse)
-                .filter(address -> type == ANY || (type == A) == (address.getAddress().length == 4)).toList();
+            List<InetAddress> addresses = found == null || type == ANY ? List.of() : found.stream().map(FakeDns::parse)
+                .filter(address -> (type == A) == (address.getAddress().length == 4)).toList();
+            boolean rfc8482 = found != null && type == ANY;
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             ByteBuffer header = ByteBuffer.allocate(12);
             header.putShort(id).putShort((short) (found == null ? 0x8183 : 0x8180)).putShort((short) 1)
-                .putShort((short) addresses.size()).putShort((short) 0).putShort((short) 0);
+                .putShort((short) (rfc8482 ? 1 : addresses.size())).putShort((short) 0).putShort((short) 0);
             out.write(header.array());
             out.write(question);
+            if (rfc8482) {
+                byte[] cpu = "RFC8482".getBytes(StandardCharsets.US_ASCII);
+                ByteBuffer record = ByteBuffer.allocate(12 + 2 + cpu.length);
+                record.putShort((short) 0xc00c).putShort((short) HINFO).putShort((short) 1)
+                    .putInt(3600).putShort((short) (2 + cpu.length)).put((byte) cpu.length).put(cpu).put((byte) 0);
+                out.write(record.array());
+            }
             for (InetAddress address : addresses) {
                 byte[] raw = address.getAddress();
                 ByteBuffer record = ByteBuffer.allocate(12 + raw.length);

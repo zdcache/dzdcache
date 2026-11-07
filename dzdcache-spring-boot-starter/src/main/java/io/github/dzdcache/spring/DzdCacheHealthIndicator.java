@@ -19,6 +19,7 @@ public class DzdCacheHealthIndicator implements HealthIndicator {
     @Override public Health health() {
         if (witness) return Health.up().withDetail("role", "WITNESS").build();
         boolean current = cluster.current();
+        var discovery = cluster.discovery();
         return (current || cluster.bootstrapping() || cluster.servesStale() ? Health.up() : Health.outOfService())
             .withDetail("staleMillis", current ? 0 : cluster.staleMillis())
             .withDetail("role", cluster.role()).withDetail("learner", cluster.learner()).withDetail("learners", cluster.learners().size())
@@ -26,6 +27,8 @@ public class DzdCacheHealthIndicator implements HealthIndicator {
             .withDetail("master", cluster.master() == null ? "none" : cluster.master().id())
             .withDetail("members", cluster.members().size()).withDetail("appliedIndex", cluster.appliedIndex()).withDetail("current", cluster.current()).withDetail("bootstrapping", cluster.bootstrapping()).withDetail("clusterSize", cluster.clusterSize()).withDetail("resizing", cluster.view().previousSize() != null)
             .withDetail("unavailableTypes", engines.engine().unavailableTypes())
+            .withDetail("discoveredPeers", discovery.peers().size())
+            .withDetail("lastDiscovery", discovery.discoveredAt() == null ? "none" : discovery.discoveredAt().toString())
             .withDetail("startupProblem", cluster.startupProblem() == null ? "none" : cluster.startupProblem())
             .withDetail("sizeWarning", cluster.sizeWarning() == null ? "none" : cluster.sizeWarning()).build();
     }

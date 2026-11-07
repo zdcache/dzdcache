@@ -1046,6 +1046,14 @@ class ClusterSimulationTest {
         assertThat(waited[0]).isIn("waiting for a to found the cluster", "waiting for b to found the cluster");
     }
 
+    @Test void theDiscoveredPeersAreMeasured() {
+        SimulatedCluster cluster = new SimulatedCluster(29);
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node a = cluster.start("a");
+        cluster.run(1_000);
+        assertThat(a.meters.get("dzdcache.discovery.peers").gauge().value()).isEqualTo(2);
+    }
+
     @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(15);
         cluster.configure("a", "b", "c");

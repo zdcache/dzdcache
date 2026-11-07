@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.security.KeyStore;
 import java.security.cert.CertificateFactory;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
 import javax.net.ssl.SSLContext;
@@ -113,7 +114,7 @@ public final class KubernetesPeerDirectory implements PeerDirectory {
             }
         }
         Membership previous = membership;
-        membership = new Membership(peers, previous.generation() + (peers.equals(previous.peers()) ? 0 : 1), true);
+        membership = new Membership(peers, previous.generation() + (peers.equals(previous.peers()) ? 0 : 1), true, Instant.now());
     }
     private static String encode(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8); }
     @Override public void close() {
