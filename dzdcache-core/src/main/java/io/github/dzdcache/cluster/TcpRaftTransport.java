@@ -108,7 +108,7 @@ public final class TcpRaftTransport implements RaftTransport, AutoCloseable {
             }
             FrameChannel.Frame greeting = opened.read(FrameChannel.HELLO_LIMIT);
             if (greeting.oversized()) throw new IOException("Peer " + peer + " sent an oversized greeting");
-            Greeting.requireAccepted(peer, greeting.body());
+            Greeting.requireAccepted(peer, greeting.body(), properties);
         }
 
         private void read(FrameChannel opened) throws IOException {

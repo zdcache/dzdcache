@@ -73,8 +73,8 @@ public final class ClusterServer implements AutoCloseable {
             if (!FrameChannel.isMagic(start)) { refuseHttp(channel, start); return; }
             FrameChannel.Frame hello = channel.read(FrameChannel.HELLO_LIMIT);
             String refusal = hello.oversized() ? "The greeting is too large" : Greeting.refusal(hello.body(), properties);
-            if (refusal != null) { channel.writeNow(0, Greeting.refused(refusal), true); return; }
-            channel.writeNow(0, Greeting.accepted(), true);
+            if (refusal != null) { channel.writeNow(0, Greeting.refused(refusal, properties), true); return; }
+            channel.writeNow(0, Greeting.accepted(properties), true);
             socket.setSoTimeout(0);
             LinkedBlockingQueue<FrameChannel.Outgoing> replies = new LinkedBlockingQueue<>();
             channel.startWriting(replies, mapper, (id, failure) -> replies.add(new FrameChannel.Outgoing(id,

@@ -1,6 +1,9 @@
 package io.github.dzdcache.discovery;
 
 import java.net.URI;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import javax.naming.NameNotFoundException;
 import javax.naming.NamingException;
@@ -12,16 +15,21 @@ import org.slf4j.LoggerFactory;
 public final class DnsPeerDirectory implements PeerDirectory {
     private static final Logger LOG = LoggerFactory.getLogger(DnsPeerDirectory.class);
     private static final String[] ADDRESS_RECORDS = {"A", "AAAA"};
+    static final Duration EMPTY_WARNING_INTERVAL = Duration.ofMinutes(1);
     private final DiscoveryProperties properties;
     private final String server;
+    private final Clock clock;
+    private Instant emptyWarnedAt;
     private volatile Membership membership = new Membership(Map.of(), 0, false);
     private volatile boolean stopped;
     private Thread worker;
 
-    public DnsPeerDirectory(DiscoveryProperties properties) { this(properties, ""); }
+    public DnsPeerDirectory(DiscoveryProperties properties) { this(properties, "", Clock.systemUTC()); }
 
-    DnsPeerDirectory(DiscoveryProperties properties, String server) {
-        this.properties = properties; this.server = server;
+    DnsPeerDirectory(DiscoveryProperties properties, String server) { this(properties, server, Clock.systemUTC()); }
+
+    DnsPeerDirectory(DiscoveryProperties properties, String server, Clock clock) {
+        this.properties = properties; this.server = server; this.clock = clock;
         if (properties.getRetryDelay() == null || properties.getRetryDelay().toMillis() < 1)
             throw new IllegalArgumentException("retry-delay must be at least one millisecond");
         if (!properties.getDnsName().matches("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*"))
@@ -56,20 +64,21 @@ public final class DnsPeerDirectory implements PeerDirectory {
         InitialDirContext context = new InitialDirContext(environment);
         try {
             List<String> addresses = new ArrayList<>();
-            var found = context.getAttributes(properties.getDnsName() + ".", ADDRESS_RECORDS);
             for (String type : ADDRESS_RECORDS) {
-                Attribute records = found.get(type);
+                Attribute records;
+                try { records = context.getAttributes(properties.getDnsName() + ".", new String[] { type }).get(type); }
+                catch (NameNotFoundException e) { continue; }
                 if (records != null) for (int i = 0; i < records.size(); i++) addresses.add(records.get(i).toString());
             }
             return addresses;
-        } catch (NameNotFoundException e) {
-            return List.of();
         } finally {
             context.close();
         }
     }
 
     private void update(List<String> addresses) {
+        Instant now = clock.instant();
+        warnIfEmpty(addresses, now);
         Map<String, URI> peers = new TreeMap<>();
         for (String ip : addresses) {
             if (ip.equals(properties.getPodIp())) continue;
@@ -77,7 +86,14 @@ public final class DnsPeerDirectory implements PeerDirectory {
             if (!uri.equals(properties.getSelfUrl())) peers.put(uri.toString(), uri);
         }
         Membership previous = membership;
-        membership = new Membership(peers, previous.generation() + (peers.equals(previous.peers()) ? 0 : 1), true);
+        membership = new Membership(peers, previous.generation() + (peers.equals(previous.peers()) ? 0 : 1), true, now);
+    }
+
+    private void warnIfEmpty(List<String> addresses, Instant now) {
+        if (!addresses.isEmpty()) { emptyWarnedAt = null; return; }
+        if (emptyWarnedAt != null && now.isBefore(emptyWarnedAt.plus(EMPTY_WARNING_INTERVAL))) return;
+        emptyWarnedAt = now;
+        LOG.warn("DNS returned no A or AAAA records for {}, so this node finds no peers", properties.getDnsName());
     }
 
     @Override public void close() {

@@ -155,7 +155,8 @@ class DzdCacheStarterTest {
         assertThat(students(learner).put(new Student(2, "Ola", "Bergen", 30))).isEqualTo(1);
         assertThat(students(started.get(1)).get(2L)).isEqualTo(new Student(2, "Ola", "Bergen", 30));
         await(() -> fingerprint(learner).equals(fingerprint(started.getFirst())));
-        assertThat(learner.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("learner", true);
+        assertThat(learner.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("learner", true)
+            .containsEntry("discoveredPeers", 3).containsEntry("lastDiscovery", "none");
     }
 
     private static final List<String> TLS = List.of("--dzdcache.cluster-tls.enabled=true", "--dzdcache.cluster-tls.bundle=cluster",
@@ -214,6 +215,23 @@ class DzdCacheStarterTest {
             }
             assertThat(seen).containsExactly("PUT 1 Anna", "PUT 2 Bo", "PUT 3 Cy", "EVICTED_LRU 1", "INVALIDATED 2");
         }
+    }
+
+    @Test void theClusterNameIsBoundAndShownInTheHealthDetails() {
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+                "--dzdcache.discovery.mode=standalone", "--dzdcache.cluster-name=3f9c2e1a", "--logging.level.root=WARN", "--spring.main.banner-mode=off")) {
+            assertThat(app.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("clusterName", "3f9c2e1a");
+        }
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+                "--dzdcache.discovery.mode=standalone", "--logging.level.root=WARN", "--spring.main.banner-mode=off")) {
+            assertThat(app.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("clusterName", "none");
+        }
+    }
+
+    @Test void anInvalidClusterNameIsRefusedAtStartup() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=standalone",
+                "--dzdcache.cluster-name=build 42", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("cluster-name must be at most 128 printable ASCII characters without spaces");
     }
 
     @Test void http2BetweenNodesNeedsAServletWebServer() {

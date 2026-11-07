@@ -80,12 +80,12 @@ public final class RaftSocket {
         private void greet(byte[] hello) {
             String refusal = hello == null ? "The greeting is too large" : Greeting.refusal(hello, properties);
             if (refusal != null) {
-                replies.add(new Reply(0, Greeting.refused(refusal)));
+                replies.add(new Reply(0, Greeting.refused(refusal, properties)));
                 replies.add(CLOSE);
                 return;
             }
             greeted = true;
-            replies.add(new Reply(0, Greeting.accepted()));
+            replies.add(new Reply(0, Greeting.accepted(properties)));
         }
 
         private void write() {

@@ -6,6 +6,7 @@ import io.github.dzdcache.cache.PutRequest;
 import io.github.dzdcache.cache.SchemaView;
 import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.dzdcache.config.ServiceProperties;
+import io.github.dzdcache.discovery.Membership;
 import io.github.dzdcache.discovery.PeerDirectory;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
@@ -62,6 +63,9 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return control.appliedIndex(); }
     public String clusterId() { return control.clusterId(); }
     public String startupProblem() { return control.startupProblem(); }
+    public String startupWait() { return control.startupWait(); }
+    public Membership discovery() { return control.discovery(); }
+    public String clusterName() { return control.clusterName(); }
     public boolean bootstrapping() { return control.bootstrapping(); }
     public int clusterSize() { return control.clusterSize(); }
     public ClusterView view() { return control.view(); }

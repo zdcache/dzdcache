@@ -48,6 +48,31 @@ class Http2ClusterTest {
         }
     }
 
+    @Test void anHttp2NodeOnlyTalksToPeersWithItsOwnClusterName() throws Exception {
+        int[] ports = Ports.free(2);
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + ports[0],
+                "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--server.http2.enabled=true", "--dzdcache.discovery.node-id=a",
+                "--dzdcache.discovery.self-url=http://localhost:" + ports[0], "--dzdcache.discovery.static-peers[0]=http://localhost:" + ports[1],
+                "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster", "--dzdcache.cluster-name=build-1",
+                "--logging.level.root=ERROR", "--spring.main.banner-mode=off");
+             var own = new io.github.dzdcache.cluster.Http2RaftTransport(JsonMapper.builder().build(), named("build-1"));
+             var next = new io.github.dzdcache.cluster.Http2RaftTransport(JsonMapper.builder().build(), named("build-2"))) {
+            URI peer = URI.create("http://localhost:" + ports[0]);
+            assertThat(own.send(peer, new io.github.dzdcache.cluster.Message.WhoLeads()).get(5, java.util.concurrent.TimeUnit.SECONDS))
+                .isInstanceOf(io.github.dzdcache.cluster.Message.Leader.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> next.send(peer, new io.github.dzdcache.cluster.Message.WhoLeads()).get(5, java.util.concurrent.TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class).cause().isInstanceOf(io.github.dzdcache.cluster.ForeignClusterException.class)
+                .hasMessage("Peer " + peer + " belongs to cluster build-1 and this node to cluster build-2 (dzdcache.cluster-name)");
+        }
+    }
+
+    private static io.github.dzdcache.config.ServiceProperties named(String clusterName) {
+        io.github.dzdcache.config.ServiceProperties properties = new io.github.dzdcache.config.ServiceProperties();
+        properties.setClusterToken("cluster");
+        properties.setClusterName(clusterName);
+        return properties;
+    }
+
     @Test void http2BetweenNodesNeedsHttp2OnTheServer() throws Exception {
         int port = Ports.free(1)[0];
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,

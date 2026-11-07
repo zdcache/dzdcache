@@ -121,6 +121,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private final ArrayDeque<Forward> queuedPuts = new ArrayDeque<>();
     private int putsInFlight;
     private final Set<URI> knownPeers = new LinkedHashSet<>();
+    private final Map<URI, String> foreignPeers = new HashMap<>();
     private final Map<String, Message.Leader> peerLogs = new HashMap<>();
     private long peerLogsAt = Long.MIN_VALUE / 2;
     private final MultiGauge entries;
@@ -142,6 +143,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private volatile boolean closed;
     private volatile boolean leaving;
     private volatile String startupProblem;
+    private volatile String startupWait;
     private volatile boolean bootstrapping;
     private final Object currency = new Object();
     private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
@@ -215,6 +217,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         Gauge.builder("dzdcache.resize.in.progress", this, coordinator -> coordinator.config().joint() ? 1 : 0).register(meters);
         Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).register(meters);
         Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).register(meters);
+        Gauge.builder("dzdcache.discovery.peers", this, coordinator -> coordinator.discovery().peers().size()).register(meters);
+        Gauge.builder("dzdcache.cluster.name", () -> 1).tag("name", properties.getClusterName().isEmpty() ? "none" : properties.getClusterName()).register(meters);
         lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
         entries = MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters);
         revisions = MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters);
@@ -263,6 +267,9 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return appliedIndex; }
     public String clusterId() { return clusterId; }
     public String startupProblem() { return startupProblem; }
+    public String startupWait() { return role == Role.STARTING ? startupWait : null; }
+    public Membership discovery() { return directory.snapshot(); }
+    public String clusterName() { return properties.getClusterName(); }
     public boolean bootstrapping() { return role == Role.STARTING && bootstrapping && startupProblem == null; }
     public int clusterSize() { return size(); }
     public ClusterView view() {
@@ -665,12 +672,15 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         directory.refresh();
         Membership found = directory.snapshot();
         if (!found.available()) return;
-        List<URI> peers = found.peers().values().stream().filter(uri -> !uri.equals(self.url())).toList();
+        List<URI> discovered = found.peers().values().stream().filter(uri -> !uri.equals(self.url())).toList();
+        foreignPeers.keySet().retainAll(discovered);
+        List<URI> peers = discovered.stream().filter(uri -> !foreignPeers.containsKey(uri)).toList();
         knownPeers.addAll(peers);
         if (peers.isEmpty()) {
             if (learner) return;
             bootstrapping = true;
             if (size() <= 1) foundCluster(List.of());
+            else waiting("waiting for " + majority() + " of " + size() + " members, discovery finds no other node");
             return;
         }
         Member started = self;
@@ -687,6 +697,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         List<Member> masters = new ArrayList<>();
         int[] waiting = { peers.size() };
         int[] answered = { 0 };
+        int[] cannotStart = { 0 };
         String[] conflict = { null };
         Runnable decide = () -> {
             if (--waiting[0] > 0 || role != Role.STARTING || self != started) return;
@@ -700,12 +711,18 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             boolean noCluster = answers.stream().noneMatch(Message.Leader::member);
             bootstrapping = noCluster;
             boolean best = answers.stream().allMatch(other -> ahead(other));
+            if (!noCluster) return;
+            if (!majorityAnswered)
+                waiting("waiting for " + majority() + " of " + size() + " members, " + (answered[0] + 1) + " answered"
+                    + (cannotStart[0] > 0 ? ", " + cannotStart[0] + " cannot start" : ""));
+            else if (!best)
+                waiting("waiting for " + answers.stream().filter(other -> !ahead(other)).findFirst().orElseThrow().self().id() + " to found the cluster");
             if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
                 foundCluster(answers.stream().map(Message.Leader::self).toList());
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
-            else if (reply instanceof Message.Leader leader && leader.cannotStart()) { }
+            else if (reply instanceof Message.Leader leader && leader.cannotStart()) cannotStart[0]++;
             else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
                 conflict[0] = "Another node at " + peer + " uses the node id " + self.id();
             else if (reply instanceof Message.Leader leader && leader.learner()) { if (leader.master() != null) masters.add(leader.master()); }
@@ -718,7 +735,14 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                 peerLogsAt = timers.now();
             }
             decide.run();
-        }, error -> decide.run());
+        }, error -> { foreign(peer, error); decide.run(); });
+    }
+
+    private int majority() { return size() / 2 + 1; }
+
+    private void waiting(String message) {
+        if (!message.equals(startupWait)) LOG.info("{} {}", self.id(), message);
+        startupWait = message;
     }
 
     private void problem(String message) {
@@ -762,6 +786,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         incarnation++;
         self = new Member(self.id(), self.url(), now);
         role = Role.STARTING;
+        startupWait = null;
         master = null;
         members = List.of();
         learners = List.of();
@@ -1073,7 +1098,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         for (Member member : learners) mine.add(member.url());
         long probedTerm = term;
         for (URI peer : knownPeers) {
-            if (mine.contains(peer)) continue;
+            if (mine.contains(peer) || foreignPeers.containsKey(peer)) continue;
             send(peer, new Message.WhoLeads(), reply -> {
                 if (!(reply instanceof Message.Leader leader) || role != Role.MASTER || term != probedTerm) return;
                 Member other = leader.master();
@@ -1084,8 +1109,16 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                     LOG.warn("{} found an older cluster led by {} and dissolves its own to rejoin it", self.id(), other.id());
                     changeMembership(list -> List.of(), 0, list -> List.of());
                 }
-            }, error -> { });
+            }, error -> foreign(peer, error));
         }
+    }
+
+    private void foreign(URI peer, Throwable error) {
+        ForeignClusterException.in(error).ifPresent(foreign -> {
+            knownPeers.remove(peer);
+            if (foreignPeers.put(peer, foreign.clusterName()) == null)
+                LOG.info("{} leaves out {}, which belongs to {}", self.id(), peer, ForeignClusterException.describe(foreign.clusterName()));
+        });
     }
 
     private boolean lagging(Progress p, long now) {

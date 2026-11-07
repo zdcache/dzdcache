@@ -59,10 +59,14 @@ public final class Http2RaftTransport implements RaftTransport, AutoCloseable {
                 .header("Content-Type", ClusterCodec.contentType(properties.getClusterEncoding()))
                 .header(ClusterCodec.HEADER, properties.getClusterEncoding())
                 .header(Protocol.HEADER, String.valueOf(Protocol.VERSION))
+                .header(Protocol.CLUSTER_NAME_HEADER, properties.getClusterName())
                 .POST(HttpRequest.BodyPublishers.ofByteArray(mapper.writeValueAsBytes(message))).build();
         } catch (RuntimeException e) { return CompletableFuture.failedFuture(e); }
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray()).orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
             .thenApply(response -> {
+                String clusterName = response.headers().firstValue(Protocol.CLUSTER_NAME_HEADER).orElse("");
+                if (response.statusCode() == Greeting.FOREIGN || (response.statusCode() == 200 && !clusterName.equals(properties.getClusterName())))
+                    throw new ForeignClusterException(peer, clusterName, properties.getClusterName());
                 if (response.statusCode() == 409)
                     throw new IncompatiblePeerException(peer, new String(response.body(), StandardCharsets.UTF_8));
                 if (response.statusCode() == 404)
