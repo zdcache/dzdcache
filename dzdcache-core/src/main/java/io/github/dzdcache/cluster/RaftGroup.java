@@ -142,6 +142,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private volatile boolean closed;
     private volatile boolean leaving;
     private volatile String startupProblem;
+    private volatile String startupWait;
     private volatile boolean bootstrapping;
     private final Object currency = new Object();
     private volatile long masterLeaseUntil = Long.MIN_VALUE / 2;
@@ -263,6 +264,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return appliedIndex; }
     public String clusterId() { return clusterId; }
     public String startupProblem() { return startupProblem; }
+    public String startupWait() { return role == Role.STARTING ? startupWait : null; }
     public boolean bootstrapping() { return role == Role.STARTING && bootstrapping && startupProblem == null; }
     public int clusterSize() { return size(); }
     public ClusterView view() {
@@ -671,6 +673,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             if (learner) return;
             bootstrapping = true;
             if (size() <= 1) foundCluster(List.of());
+            else waiting("waiting for " + majority() + " of " + size() + " members, discovery finds no other node");
             return;
         }
         Member started = self;
@@ -687,6 +690,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         List<Member> masters = new ArrayList<>();
         int[] waiting = { peers.size() };
         int[] answered = { 0 };
+        int[] cannotStart = { 0 };
         String[] conflict = { null };
         Runnable decide = () -> {
             if (--waiting[0] > 0 || role != Role.STARTING || self != started) return;
@@ -700,12 +704,18 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             boolean noCluster = answers.stream().noneMatch(Message.Leader::member);
             bootstrapping = noCluster;
             boolean best = answers.stream().allMatch(other -> ahead(other));
+            if (!noCluster) return;
+            if (!majorityAnswered)
+                waiting("waiting for " + majority() + " of " + size() + " members, " + (answered[0] + 1) + " answered"
+                    + (cannotStart[0] > 0 ? ", " + cannotStart[0] + " cannot start" : ""));
+            else if (!best)
+                waiting("waiting for " + answers.stream().filter(other -> !ahead(other)).findFirst().orElseThrow().self().id() + " to found the cluster");
             if (majorityAnswered && noCluster && best && timers.now() - self.startedAt() >= bootstrapWait())
                 foundCluster(answers.stream().map(Message.Leader::self).toList());
         };
         for (URI peer : peers) send(peer, new Message.WhoLeads(), reply -> {
             if (reply instanceof Message.Leader leader && leader.self().equals(self)) answered[0]++;
-            else if (reply instanceof Message.Leader leader && leader.cannotStart()) { }
+            else if (reply instanceof Message.Leader leader && leader.cannotStart()) cannotStart[0]++;
             else if (reply instanceof Message.Leader leader && leader.self().id().equals(self.id()))
                 conflict[0] = "Another node at " + peer + " uses the node id " + self.id();
             else if (reply instanceof Message.Leader leader && leader.learner()) { if (leader.master() != null) masters.add(leader.master()); }
@@ -719,6 +729,13 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
             decide.run();
         }, error -> decide.run());
+    }
+
+    private int majority() { return size() / 2 + 1; }
+
+    private void waiting(String message) {
+        if (!message.equals(startupWait)) LOG.info("{} {}", self.id(), message);
+        startupWait = message;
     }
 
     private void problem(String message) {
@@ -762,6 +779,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         incarnation++;
         self = new Member(self.id(), self.url(), now);
         role = Role.STARTING;
+        startupWait = null;
         master = null;
         members = List.of();
         learners = List.of();

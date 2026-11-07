@@ -62,6 +62,7 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return control.appliedIndex(); }
     public String clusterId() { return control.clusterId(); }
     public String startupProblem() { return control.startupProblem(); }
+    public String startupWait() { return control.startupWait(); }
     public boolean bootstrapping() { return control.bootstrapping(); }
     public int clusterSize() { return control.clusterSize(); }
     public ClusterView view() { return control.view(); }
