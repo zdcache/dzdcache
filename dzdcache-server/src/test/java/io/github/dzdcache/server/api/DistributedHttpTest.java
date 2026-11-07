@@ -146,7 +146,7 @@ class DistributedHttpTest {
                         ConfigurableApplicationContext first, ConfigurableApplicationContext second) {}
     private static Pair pair(String transport) throws Exception {
         for (int attempt = 1; ; attempt++) {
-            int[] ports = ports(4);
+            int[] ports = Ports.free(4);
             ConfigurableApplicationContext first = null;
             try {
                 first = node(transport, ports[0], ports[2], ports[3], ports[1]);
@@ -200,16 +200,6 @@ class DistributedHttpTest {
             response = post(http, port, path, body, "client");
         }
         return response;
-    }
-    private static int[] ports(int count) throws Exception {
-        ServerSocket[] sockets = new ServerSocket[count];
-        try {
-            int[] ports = new int[count];
-            for (int i = 0; i < count; i++) { sockets[i] = new ServerSocket(0); ports[i] = sockets[i].getLocalPort(); }
-            return ports;
-        } finally {
-            for (ServerSocket socket : sockets) if (socket != null) socket.close();
-        }
     }
     private static String put(int revision, String city) {
         return "{\"specification\":\"students\",\"schemaVersion\":1,\"revision\":" + revision

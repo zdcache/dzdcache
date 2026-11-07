@@ -2,7 +2,6 @@ package io.github.dzdcache.server.api;
 
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.dzdcache.server.DzdCacheApplication;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -24,7 +23,7 @@ class StaleReadServerTest {
     private static final String GET = "{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":1}";
 
     @Test void aNodeThatLosesItsPeersAnswersFromItsCopyAndSaysSo() throws Exception {
-        int[] ports = ports(6);
+        int[] ports = Ports.free(6);
         List<ConfigurableApplicationContext> nodes = new ArrayList<>();
         try (HttpClient http = HttpClient.newHttpClient()) {
             for (int i = 0; i < 3; i++) nodes.add(node(i, ports));
@@ -72,14 +71,4 @@ class StaleReadServerTest {
             .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private static int[] ports(int count) throws Exception {
-        ServerSocket[] sockets = new ServerSocket[count];
-        try {
-            int[] ports = new int[count];
-            for (int i = 0; i < count; i++) { sockets[i] = new ServerSocket(0); ports[i] = sockets[i].getLocalPort(); }
-            return ports;
-        } finally {
-            for (ServerSocket socket : sockets) if (socket != null) socket.close();
-        }
-    }
 }

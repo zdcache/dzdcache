@@ -4,7 +4,6 @@ import io.github.dzdcache.cluster.ClusterCodec;
 import io.github.dzdcache.cluster.Protocol;
 import io.github.dzdcache.cluster.RaftEndpoint;
 import io.github.dzdcache.server.DzdCacheApplication;
-import java.net.ServerSocket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -18,11 +17,10 @@ import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class Http2ClusterTest {
-    private static int freePort() throws Exception { try (ServerSocket socket = new ServerSocket(0)) { return socket.getLocalPort(); } }
 
     @Test void clusterTrafficUsesHttp2OnTheServersOwnPortAndRefusesAnotherProtocolOrEncoding() throws Exception {
-        int port = freePort();
-        int peer = freePort();
+        int port = Ports.free(1)[0];
+        int peer = Ports.free(1)[0];
         try (ConfigurableApplicationContext app = new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
                 "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--server.http2.enabled=true", "--dzdcache.discovery.node-id=a", "--dzdcache.discovery.self-url=http://localhost:" + port,
                 "--dzdcache.discovery.static-peers[0]=http://localhost:" + peer, "--dzdcache.api-token=client", "--dzdcache.cluster-token=cluster",
@@ -51,7 +49,7 @@ class Http2ClusterTest {
     }
 
     @Test void http2BetweenNodesNeedsHttp2OnTheServer() throws Exception {
-        int port = freePort();
+        int port = Ports.free(1)[0];
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new SpringApplicationBuilder(DzdCacheApplication.class).run("--server.port=" + port,
                 "--dzdcache.discovery.mode=static", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.node-id=a",
                 "--dzdcache.discovery.self-url=http://localhost:" + port, "--dzdcache.cluster-token=cluster",
