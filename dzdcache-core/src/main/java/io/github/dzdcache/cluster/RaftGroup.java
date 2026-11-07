@@ -215,6 +215,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         Gauge.builder("dzdcache.resize.in.progress", this, coordinator -> coordinator.config().joint() ? 1 : 0).register(meters);
         Gauge.builder("dzdcache.startup.problem", this, coordinator -> coordinator.startupProblem == null ? 0 : 1).register(meters);
         Gauge.builder("dzdcache.members.reachable", this, coordinator -> coordinator.reachable).register(meters);
+        Gauge.builder("dzdcache.discovery.peers", this, coordinator -> coordinator.discovery().peers().size()).register(meters);
         lag = MultiGauge.builder("dzdcache.replication.lag").description("Log entries a member is behind the master").register(meters);
         entries = MultiGauge.builder("dzdcache.entries").description("Cached roots").register(meters);
         revisions = MultiGauge.builder("dzdcache.revisions").description("Revision records").register(meters);
@@ -263,6 +264,7 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     public long appliedIndex() { return appliedIndex; }
     public String clusterId() { return clusterId; }
     public String startupProblem() { return startupProblem; }
+    public Membership discovery() { return directory.snapshot(); }
     public boolean bootstrapping() { return role == Role.STARTING && bootstrapping && startupProblem == null; }
     public int clusterSize() { return size(); }
     public ClusterView view() {

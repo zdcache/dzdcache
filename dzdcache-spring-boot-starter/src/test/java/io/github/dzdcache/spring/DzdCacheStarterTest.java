@@ -155,7 +155,8 @@ class DzdCacheStarterTest {
         assertThat(students(learner).put(new Student(2, "Ola", "Bergen", 30))).isEqualTo(1);
         assertThat(students(started.get(1)).get(2L)).isEqualTo(new Student(2, "Ola", "Bergen", 30));
         await(() -> fingerprint(learner).equals(fingerprint(started.getFirst())));
-        assertThat(learner.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("learner", true);
+        assertThat(learner.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("learner", true)
+            .containsEntry("discoveredPeers", 3).containsEntry("lastDiscovery", "none");
     }
 
     private static final List<String> TLS = List.of("--dzdcache.cluster-tls.enabled=true", "--dzdcache.cluster-tls.bundle=cluster",
