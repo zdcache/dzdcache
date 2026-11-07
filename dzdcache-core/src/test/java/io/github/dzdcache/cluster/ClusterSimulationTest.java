@@ -1001,6 +1001,51 @@ class ClusterSimulationTest {
         assertThat(c.coordinator.bootstrapping()).as("a node joining an existing cluster is not bootstrapping").isFalse();
     }
 
+    @Test void aNodeThatWaitsForAMajoritySaysHowManyHaveAnswered() {
+        SimulatedCluster cluster = new SimulatedCluster(23);
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node a = cluster.start("a");
+        cluster.run(10_000);
+        assertThat(a.coordinator.startupWait()).isEqualTo("waiting for 2 of 3 members, 1 answered");
+        cluster.start("b");
+        assertThat(cluster.runUntil(() -> a.coordinator.current(), 20_000)).isTrue();
+        assertThat(a.coordinator.startupWait()).isNull();
+    }
+
+    @Test void aNodeThatWaitsForAMajorityCountsTheNodesThatCannotStart() {
+        SimulatedCluster cluster = new SimulatedCluster(17);
+        cluster.configure("a", "b", "c");
+        cluster.selfUrls.put("c", java.net.URI.create("http://a:8080"));
+        cluster.start("c");
+        SimulatedCluster.Node a = cluster.start("a");
+        cluster.run(10_000);
+        assertThat(a.coordinator.startupWait()).isEqualTo("waiting for 2 of 3 members, 1 answered, 1 cannot start");
+    }
+
+    @Test void aNodeWhoseDiscoveryFindsNoOtherNodeSaysSo() {
+        SimulatedCluster cluster = new SimulatedCluster(29);
+        cluster.configure("a");
+        cluster.properties.setClusterSize(3);
+        SimulatedCluster.Node a = cluster.start("a");
+        cluster.run(10_000);
+        assertThat(a.coordinator.role()).isEqualTo(ClusterCoordinator.Role.STARTING);
+        assertThat(a.coordinator.startupWait()).isEqualTo("waiting for 2 of 3 members, discovery finds no other node");
+    }
+
+    @Test void aNodeThatLetsAnotherFoundTheClusterSaysWhichOne() {
+        SimulatedCluster cluster = new SimulatedCluster(31);
+        cluster.configure("a", "b", "c");
+        SimulatedCluster.Node a = cluster.start("a");
+        SimulatedCluster.Node b = cluster.start("b");
+        String[] waited = { null };
+        assertThat(cluster.runUntil(() -> {
+            if (b.coordinator.startupWait() != null && b.coordinator.startupWait().endsWith("to found the cluster")) waited[0] = b.coordinator.startupWait();
+            if (a.coordinator.startupWait() != null && a.coordinator.startupWait().endsWith("to found the cluster")) waited[0] = a.coordinator.startupWait();
+            return a.coordinator.current() && b.coordinator.current();
+        }, 20_000)).isTrue();
+        assertThat(waited[0]).isIn("waiting for a to found the cluster", "waiting for b to found the cluster");
+    }
+
     @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(15);
         cluster.configure("a", "b", "c");
