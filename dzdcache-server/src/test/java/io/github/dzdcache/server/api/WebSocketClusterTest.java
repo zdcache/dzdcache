@@ -1,6 +1,7 @@
 package io.github.dzdcache.server.api;
 
 import io.github.dzdcache.cluster.ClusterCodec;
+import io.github.dzdcache.cluster.ForeignClusterException;
 import io.github.dzdcache.cluster.IncompatiblePeerException;
 import io.github.dzdcache.cluster.Message;
 import io.github.dzdcache.cluster.RaftSocket;
@@ -51,6 +52,29 @@ class WebSocketClusterTest {
                 .isInstanceOf(ExecutionException.class).cause().isInstanceOf(IncompatiblePeerException.class)
                 .hasMessageContaining("encoded as smile (dzdcache.cluster-encoding); the request uses json");
         }
+    }
+
+    @Test void aWebSocketNodeOnlyTalksToPeersWithItsOwnClusterName() throws Exception {
+        int[] ports = Ports.free(2);
+        try (ConfigurableApplicationContext app = node(ports[0], ports[1], "--dzdcache.cluster-transport=websocket", "--dzdcache.cluster-name=build-1");
+             var own = new WebSocketRaftTransport(mapper, named("build-1"));
+             var next = new WebSocketRaftTransport(mapper, named("build-2"));
+             var unnamed = new WebSocketRaftTransport(mapper, named(""))) {
+            URI peer = URI.create("http://localhost:" + ports[0]);
+            assertThat(own.send(peer, new Message.WhoLeads()).get(5, TimeUnit.SECONDS)).isInstanceOf(Message.Leader.class);
+            assertThatThrownBy(() -> next.send(peer, new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOf(ForeignClusterException.class)
+                .hasMessage("Peer " + peer + " belongs to cluster build-1 and this node to cluster build-2 (dzdcache.cluster-name)");
+            assertThatThrownBy(() -> unnamed.send(peer, new Message.WhoLeads()).get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class).cause().isInstanceOf(ForeignClusterException.class)
+                .hasMessage("Peer " + peer + " belongs to cluster build-1 and this node to no cluster name (dzdcache.cluster-name)");
+        }
+    }
+
+    private static ServiceProperties named(String clusterName) {
+        ServiceProperties properties = properties("json");
+        properties.setClusterName(clusterName);
+        return properties;
     }
 
     @Test void aWebSocketNodeExplainsThatItsPeerUsesAnotherTransport() throws Exception {

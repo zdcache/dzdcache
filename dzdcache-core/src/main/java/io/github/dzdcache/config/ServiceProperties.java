@@ -31,6 +31,7 @@ public class ServiceProperties {
     private boolean learnerFreshReads = true;
     private String apiToken = "";
     private String clusterToken = "";
+    private String clusterName = "";
     private Duration replicationTimeout = Duration.ofSeconds(3);
     private Duration syncInterval = Duration.ofSeconds(10);
     private final ClusterTls clusterTls = new ClusterTls();
@@ -56,6 +57,8 @@ public class ServiceProperties {
             throw new IllegalArgumentException("revision-retention must be at least one millisecond");
         if (maxSearchResults < 1) throw new IllegalArgumentException("max-search-results must be positive");
         if (maxScan < 1) throw new IllegalArgumentException("max-scan must be positive");
+        if (clusterName == null || !clusterName.matches("[\\x21-\\x7E]{0,128}"))
+            throw new IllegalArgumentException("cluster-name must be at most 128 printable ASCII characters without spaces");
         if (changesBuffer < 0) throw new IllegalArgumentException("changes-buffer cannot be negative");
         if (replicationPageBytes < 1 || (long) replicationPageBytes + maxRequestBytes > maxSnapshotBytes)
             throw new IllegalArgumentException("replication-page-bytes plus max-request-bytes must fit within max-snapshot-bytes");
@@ -102,6 +105,7 @@ public class ServiceProperties {
     public int getClusterSize() { return clusterSize; } public void setClusterSize(int v) { clusterSize = v; }
     public String getApiToken() { return apiToken; } public void setApiToken(String v) { apiToken = v; }
     public String getClusterToken() { return clusterToken; } public void setClusterToken(String v) { clusterToken = v; }
+    public String getClusterName() { return clusterName; } public void setClusterName(String v) { clusterName = v; }
     public Duration getReplicationTimeout() { return replicationTimeout; } public void setReplicationTimeout(Duration v) { replicationTimeout = v; }
     public Duration getSyncInterval() { return syncInterval; } public void setSyncInterval(Duration v) { syncInterval = v; }
     public ClusterTls getClusterTls() { return clusterTls; }

@@ -217,6 +217,23 @@ class DzdCacheStarterTest {
         }
     }
 
+    @Test void theClusterNameIsBoundAndShownInTheHealthDetails() {
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+                "--dzdcache.discovery.mode=standalone", "--dzdcache.cluster-name=3f9c2e1a", "--logging.level.root=WARN", "--spring.main.banner-mode=off")) {
+            assertThat(app.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("clusterName", "3f9c2e1a");
+        }
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+                "--dzdcache.discovery.mode=standalone", "--logging.level.root=WARN", "--spring.main.banner-mode=off")) {
+            assertThat(app.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("clusterName", "none");
+        }
+    }
+
+    @Test void anInvalidClusterNameIsRefusedAtStartup() {
+        assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=standalone",
+                "--dzdcache.cluster-name=build 42", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))
+            .hasStackTraceContaining("cluster-name must be at most 128 printable ASCII characters without spaces");
+    }
+
     @Test void http2BetweenNodesNeedsAServletWebServer() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=static",
                 "--dzdcache.cluster-token=secret", "--dzdcache.cluster-transport=http2", "--dzdcache.discovery.self-url=http://localhost:7070",

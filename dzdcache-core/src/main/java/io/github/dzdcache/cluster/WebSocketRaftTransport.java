@@ -143,7 +143,7 @@ public final class WebSocketRaftTransport implements RaftTransport, AutoCloseabl
             if (!greeted.isDone()) {
                 try {
                     if (tooLarge) throw new IOException("Peer " + peer + " sent an oversized greeting");
-                    Greeting.requireAccepted(peer, java.util.Arrays.copyOfRange(whole, Long.BYTES, whole.length));
+                    Greeting.requireAccepted(peer, java.util.Arrays.copyOfRange(whole, Long.BYTES, whole.length), properties);
                     greeted.complete(null);
                 } catch (Exception e) {
                     greeted.completeExceptionally(e);
@@ -161,15 +161,15 @@ public final class WebSocketRaftTransport implements RaftTransport, AutoCloseabl
         }
 
         @Override public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            IOException closedByPeer = new IOException("The connection to " + peer + " was closed");
-            greeted.completeExceptionally(closedByPeer);
-            breakOff(closedByPeer);
+            breakOff(refusedOr(new IOException("The connection to " + peer + " was closed")));
             return null;
         }
 
-        @Override public void onError(WebSocket webSocket, Throwable error) {
-            greeted.completeExceptionally(error);
-            breakOff(error);
+        @Override public void onError(WebSocket webSocket, Throwable error) { breakOff(refusedOr(error)); }
+
+        private Throwable refusedOr(Throwable failure) {
+            greeted.completeExceptionally(failure);
+            return greeted.state() == java.util.concurrent.Future.State.FAILED ? greeted.exceptionNow() : failure;
         }
 
         private void fail(long id, Throwable failure) {

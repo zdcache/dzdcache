@@ -42,6 +42,7 @@ final class SimulatedCluster {
     long snapshotBytes = 4_000;
     final Map<String, SimulatedDisk> disks = new HashMap<>();
     final Map<String, ServiceProperties> learners = new HashMap<>();
+    final Map<String, String> clusterNames = new HashMap<>();
     private final Map<String, URI> moved = new HashMap<>();
     private final Map<String, String> hosts = new HashMap<>();
     private long now = 1_000_000;
@@ -91,7 +92,7 @@ final class SimulatedCluster {
             };
             Storage storage = persistent ? disk(id) : Storage.none();
             this.coordinator = new ClusterCoordinator(holder, directory, (peer, message) -> deliver(this, peer, message),
-                new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), learners.getOrDefault(id, properties), meters, timers,
+                new Member(nodeIds.getOrDefault(id, id), selfUrls.getOrDefault(id, url), now), propertiesOf(id), meters, timers,
                 new SplittableRandom(random.nextLong()), mapper, storage);
         }
         CacheEngine engine() { return holder.engine(); }
@@ -128,13 +129,28 @@ final class SimulatedCluster {
 
     void at(long delay, Runnable task) { events.add(new Event(now + Math.max(0, delay), sequence++, task)); }
 
-    Node startLearner(String id, boolean freshReads) {
+    private static ServiceProperties copy(ServiceProperties original) {
         ServiceProperties own = new ServiceProperties();
         for (java.lang.reflect.Field field : ServiceProperties.class.getDeclaredFields()) {
             if (java.lang.reflect.Modifier.isFinal(field.getModifiers()) || java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
             field.setAccessible(true);
-            try { field.set(own, field.get(properties)); } catch (IllegalAccessException e) { throw new IllegalStateException(e); }
+            try { field.set(own, field.get(original)); } catch (IllegalAccessException e) { throw new IllegalStateException(e); }
         }
+        return own;
+    }
+
+    private ServiceProperties propertiesOf(String id) {
+        ServiceProperties own = learners.getOrDefault(id, properties);
+        if (!clusterNames.containsKey(id)) return own;
+        ServiceProperties named = copy(own);
+        named.setClusterName(clusterNames.get(id));
+        return named;
+    }
+
+    private String clusterName(String id) { return clusterNames.getOrDefault(id, learners.getOrDefault(id, properties).getClusterName()); }
+
+    Node startLearner(String id, boolean freshReads) {
+        ServiceProperties own = copy(properties);
         own.setRole("learner");
         own.setLearnerFreshReads(freshReads);
         own.validate();
@@ -220,6 +236,10 @@ final class SimulatedCluster {
         at(latency, () -> {
             if (!from.alive) return;
             if (!reachable(from.id, to)) { at(timeout - latency, () -> reply.completeExceptionally(new IllegalStateException("unreachable"))); return; }
+            if (!clusterName(from.id).equals(clusterName(to))) {
+                at(1 + random.nextInt(4), () -> reply.completeExceptionally(new ForeignClusterException(peer, clusterName(to), clusterName(from.id))));
+                return;
+            }
             Witness witness = witnesses.get(to);
             (witness != null ? witness.handle(mapper.readValue(wire, Message.class)) : nodes.get(to).coordinator.handle(mapper.readValue(wire, Message.class))).whenComplete((answer, error) -> at(1 + random.nextInt(4), () -> {
                 if (error != null) reply.completeExceptionally(error);

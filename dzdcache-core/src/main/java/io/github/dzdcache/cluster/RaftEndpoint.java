@@ -10,7 +10,8 @@ import tools.jackson.databind.ObjectMapper;
 public final class RaftEndpoint {
     public static final String PATH = "/internal/raft";
 
-    public record Reply(int status, String contentType, byte[] body) {
+    public record Reply(int status, String contentType, byte[] body, String clusterName) {
+        public Reply(int status, String contentType, byte[] body) { this(status, contentType, body, null); }
         static Reply text(int status, String text) { return new Reply(status, "text/plain; charset=utf-8", text.getBytes(StandardCharsets.UTF_8)); }
     }
 
@@ -30,10 +31,23 @@ public final class RaftEndpoint {
     }
 
     public CompletableFuture<Reply> handle(String method, String authorization, String protocol, String encoding, byte[] body) {
+        return handle(method, authorization, protocol, encoding, "", body);
+    }
+
+    public CompletableFuture<Reply> handle(String method, String authorization, String protocol, String encoding, String clusterName, byte[] body) {
         if (!"POST".equals(method)) return CompletableFuture.completedFuture(new Reply(405, null, new byte[0]));
         if (authorization == null || !MessageDigest.isEqual(authorization.getBytes(StandardCharsets.UTF_8),
                 ("Bearer " + properties.getClusterToken()).getBytes(StandardCharsets.UTF_8)))
             return CompletableFuture.completedFuture(new Reply(401, null, new byte[0]));
+        String requester = clusterName == null ? "" : clusterName;
+        if (!requester.equals(properties.getClusterName()))
+            return CompletableFuture.completedFuture(new Reply(Greeting.FOREIGN, "text/plain; charset=utf-8",
+                Greeting.foreignRefusal(properties.getClusterName(), requester).getBytes(StandardCharsets.UTF_8), properties.getClusterName()));
+        return authenticated(protocol, encoding, body).thenApply(reply ->
+            new Reply(reply.status(), reply.contentType(), reply.body(), properties.getClusterName()));
+    }
+
+    private CompletableFuture<Reply> authenticated(String protocol, String encoding, byte[] body) {
         if (!String.valueOf(Protocol.VERSION).equals(protocol))
             return CompletableFuture.completedFuture(Reply.text(409, "This node speaks cluster protocol " + Protocol.VERSION + " over HTTP/2; the request uses "
                 + (protocol == null ? "none" : protocol)));

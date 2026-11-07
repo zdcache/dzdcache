@@ -1054,6 +1054,52 @@ class ClusterSimulationTest {
         assertThat(a.meters.get("dzdcache.discovery.peers").gauge().value()).isEqualTo(2);
     }
 
+    @Test void aNewBuildFoundsItsOwnClusterBesideTheRunningBuildWithoutDisturbingIt() {
+        rollOut("build-1", "build-2");
+    }
+
+    @Test void nodesWithoutAClusterNameDoNotClusterWithNodesThatHaveOne() {
+        rollOut(null, "build-2");
+    }
+
+    private void rollOut(String running, String next) {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ClusterCoordinator.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> log = new ch.qos.logback.core.read.ListAppender<>();
+        log.start();
+        logger.addAppender(log);
+        try {
+            SimulatedCluster cluster = new SimulatedCluster(37);
+            cluster.configure("a", "b", "c", "d", "e", "f");
+            cluster.properties.setClusterSize(3);
+            List<String> old = List.of("a", "b", "c"), fresh = List.of("d", "e", "f");
+            if (running != null) for (String id : old) cluster.clusterNames.put(id, running);
+            for (String id : fresh) cluster.clusterNames.put(id, next);
+            List<SimulatedCluster.Node> oldNodes = old.stream().map(cluster::start).toList();
+            assertThat(cluster.runUntil(() -> oldNodes.stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+            long term = oldNodes.getFirst().coordinator.term();
+            List<SimulatedCluster.Node> freshNodes = fresh.stream().map(cluster::start).toList();
+            assertThat(cluster.runUntil(() -> freshNodes.stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+            cluster.run(3 * cluster.properties.getMemberTimeout().toMillis());
+            for (SimulatedCluster.Node node : oldNodes) {
+                assertThat(node.coordinator.members()).as("members on " + node.id).extracting(Member::id).containsExactlyInAnyOrderElementsOf(old);
+                assertThat(node.coordinator.term()).as("term on " + node.id).isEqualTo(term);
+                assertThat(node.coordinator.master().id()).isIn(old);
+            }
+            for (SimulatedCluster.Node node : freshNodes) {
+                assertThat(node.coordinator.members()).as("members on " + node.id).extracting(Member::id).containsExactlyInAnyOrderElementsOf(fresh);
+                assertThat(node.coordinator.master().id()).isIn(fresh);
+            }
+            for (SimulatedCluster.Node node : cluster.nodes.values()) assertThat(node.coordinator.startupProblem()).as("problem on " + node.id).isNull();
+            List<String> leftOut = log.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).filter(line -> line.contains(" leaves out ")).toList();
+            assertThat(leftOut).doesNotHaveDuplicates();
+            for (String id : fresh) for (String other : old)
+                assertThat(leftOut).as(id + " logs " + other).contains(id + " leaves out http://" + other + ":8080, which belongs to "
+                    + (running == null ? "no cluster name" : "cluster " + running));
+        } finally {
+            logger.detachAppender(log);
+        }
+    }
+
     @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(15);
         cluster.configure("a", "b", "c");
