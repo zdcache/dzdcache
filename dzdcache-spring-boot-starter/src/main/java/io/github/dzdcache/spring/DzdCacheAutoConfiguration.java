@@ -139,6 +139,8 @@ public class DzdCacheAutoConfiguration {
                                        ServiceProperties properties, ObjectProvider<MeterRegistry> meters, DzdCacheMapper mapper,
                                        ObjectProvider<Storage> storage) {
         properties.setClusterSize(properties.learner() ? Math.max(1, properties.getClusterSize()) : clusterSize(discovery, properties.getClusterSize()));
+        properties.setClusterName(clusterName(discovery, properties));
+        properties.validate();
         if (properties.getWitnessUrl() != null) {
             if (properties.getClusterSize() != 2) throw new IllegalArgumentException("dzdcache.witness-url is only for a cluster of two nodes");
             discovery.requireScheme(properties.getWitnessUrl(), "dzdcache.witness-url");
@@ -147,6 +149,17 @@ public class DzdCacheAutoConfiguration {
         if (!discovery.getMode().equals("standalone")) LOG.info("dzdcache advertises {} as node {}", self.url(), self.id());
         return new ClusterCoordinator(engines, directory, transport, self, properties, meters.getIfUnique(SimpleMeterRegistry::new),
             new SerialTimers(), new java.security.SecureRandom(), mapper.mapper(), storage.getIfAvailable(Storage::none));
+    }
+
+    static String clusterName(DiscoveryProperties discovery, ServiceProperties properties) {
+        if (!properties.isClusterNameFromPodName()) return properties.getClusterName();
+        if (!properties.getClusterName().isEmpty())
+            throw new IllegalArgumentException("Set dzdcache.cluster-name or dzdcache.cluster-name-from-pod-name, not both");
+        String pod = discovery.getHostname();
+        int suffix = pod.lastIndexOf('-');
+        if (suffix < 1)
+            throw new IllegalArgumentException("dzdcache.cluster-name-from-pod-name needs the pod name in HOSTNAME, like <deployment>-<pod-template-hash>-<suffix>, but HOSTNAME is '" + pod + "'");
+        return pod.substring(0, suffix);
     }
 
     static int clusterSize(DiscoveryProperties discovery, int configured) {

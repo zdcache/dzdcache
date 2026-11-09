@@ -1100,6 +1100,31 @@ class ClusterSimulationTest {
         }
     }
 
+    @Test void aRolloutRestartKeepsServingWhenEveryOldPodStopsAtOnceAndAReplacedPodRejoinsItsRollout() {
+        SimulatedCluster cluster = new SimulatedCluster(41);
+        cluster.configure("a", "b", "c", "d", "e", "f", "g");
+        cluster.properties.setClusterSize(3);
+        for (String id : List.of("a", "b", "c")) cluster.clusterNames.put(id, "engine-68547bff78");
+        for (String id : List.of("d", "e", "f", "g")) cluster.clusterNames.put(id, "engine-5d9c7f6b4c");
+        List<SimulatedCluster.Node> old = List.of("a", "b", "c").stream().map(cluster::start).toList();
+        assertThat(cluster.runUntil(() -> old.stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+        List<SimulatedCluster.Node> next = List.of("d", "e", "f").stream().map(cluster::start).toList();
+        assertThat(cluster.runUntil(() -> next.stream().allMatch(node -> node.coordinator.current()), 30_000)).isTrue();
+        for (String id : List.of("a", "b", "c")) cluster.crash(id);
+        cluster.run(2 * cluster.properties.getMemberTimeout().toMillis());
+        for (SimulatedCluster.Node node : next) {
+            assertThat(node.coordinator.current()).as("current on " + node.id).isTrue();
+            assertThat(node.coordinator.members()).as("members on " + node.id).extracting(Member::id).containsExactlyInAnyOrder("d", "e", "f");
+            assertThat(node.coordinator.startupProblem()).isNull();
+        }
+        cluster.crash("e");
+        SimulatedCluster.Node replacement = cluster.start("g");
+        assertThat(cluster.runUntil(() -> replacement.coordinator.current()
+            && new java.util.HashSet<>(replacement.coordinator.members().stream().map(Member::id).toList()).equals(java.util.Set.of("d", "f", "g")), 60_000))
+            .as("g takes the slot of e").isTrue();
+        assertThat(cluster.nodes.get("d").coordinator.members()).extracting(Member::id).containsExactlyInAnyOrder("d", "f", "g");
+    }
+
     @Test void aNodeWhoseSelfUrlReachesAnotherNodeDoesNotStart() {
         SimulatedCluster cluster = new SimulatedCluster(15);
         cluster.configure("a", "b", "c");

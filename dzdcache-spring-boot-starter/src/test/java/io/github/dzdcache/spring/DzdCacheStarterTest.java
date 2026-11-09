@@ -228,6 +228,14 @@ class DzdCacheStarterTest {
         }
     }
 
+    @Test void theClusterNameCanComeFromThePodName() {
+        try (ConfigurableApplicationContext app = new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run(
+                "--dzdcache.discovery.mode=standalone", "--dzdcache.discovery.hostname=fx-pricing-engine-68547bff78-x2k9p",
+                "--dzdcache.cluster-name-from-pod-name=true", "--logging.level.root=WARN", "--spring.main.banner-mode=off")) {
+            assertThat(app.getBean(DzdCacheHealthIndicator.class).health().getDetails()).containsEntry("clusterName", "fx-pricing-engine-68547bff78");
+        }
+    }
+
     @Test void anInvalidClusterNameIsRefusedAtStartup() {
         assertThatThrownBy(() -> new SpringApplicationBuilder(Students.class).web(WebApplicationType.NONE).run("--dzdcache.discovery.mode=standalone",
                 "--dzdcache.cluster-name=build 42", "--logging.level.root=OFF", "--spring.main.banner-mode=off"))

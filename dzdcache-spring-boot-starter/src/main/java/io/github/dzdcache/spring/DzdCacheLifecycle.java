@@ -1,18 +1,14 @@
 package io.github.dzdcache.spring;
 
-import io.github.dzdcache.cache.CacheException;
 import io.github.dzdcache.cache.TypeDescriptor;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.dzdcache.cluster.ClusterServer;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
 final class DzdCacheLifecycle implements SmartLifecycle {
-    private static final Logger LOG = LoggerFactory.getLogger(DzdCacheLifecycle.class);
     private final ClusterCoordinator cluster;
     private final ClusterServer server;
     private final boolean openClusterPort;
@@ -31,24 +27,11 @@ final class DzdCacheLifecycle implements SmartLifecycle {
         catch (IOException e) { throw new UncheckedIOException("Cannot open the cluster port", e); }
         if (member) cluster.start();
         running = true;
-        if (member && !types.isEmpty()) publisher = Thread.ofVirtual().name("dzdcache-publish").start(this::publishTypes);
-    }
-
-    private void publishTypes() {
-        for (TypeDescriptor type : types) {
-            while (running) {
-                try {
-                    if (cluster.ready()) { cluster.publish(type); break; }
-                } catch (CacheException e) {
-                    if (e.status() != 503) {
-                        LOG.error("Cache type {}/{} was not published: {}", type.name(), type.version(), e.getMessage());
-                        break;
-                    }
-                }
-                try { Thread.sleep(200); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
-            }
-        }
+        if (member && !types.isEmpty()) publisher = Thread.ofVirtual().name("dzdcache-publish").start(new TypePublisher(new TypePublisher.Cluster() {
+            @Override public boolean ready() { return cluster.ready(); }
+            @Override public String clusterId() { return cluster.clusterId(); }
+            @Override public void publish(TypeDescriptor type) { cluster.publish(type); }
+        }, types, 200));
     }
 
     @Override public synchronized void stop() {
