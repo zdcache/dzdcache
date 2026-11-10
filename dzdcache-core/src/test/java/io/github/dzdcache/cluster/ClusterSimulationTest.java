@@ -1192,6 +1192,23 @@ class ClusterSimulationTest {
             || c.coordinator.members().size() == 3, 5_000)).isTrue();
     }
 
+    @Test void aNodeThatCannotLeaveInTimeSaysSoAndWhenItsSlotCanBeTaken() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ClusterCoordinator.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> log = new ch.qos.logback.core.read.ListAppender<>();
+        log.start();
+        logger.addAppender(log);
+        try {
+            SimulatedCluster cluster = new SimulatedCluster(10);
+            started(cluster, "a", "b", "c");
+            SimulatedCluster.Node follower = cluster.nodes.values().stream().filter(node -> node.coordinator.role() == ClusterCoordinator.Role.FOLLOWER).findFirst().orElseThrow();
+            follower.coordinator.leave();
+            assertThat(log.list).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .contains(follower.id + " could not leave the cluster within 2 seconds; a new node can take its slot after dzdcache.member-timeout (10000 ms)");
+        } finally {
+            logger.detachAppender(log);
+        }
+    }
+
     @Test void whenTwoOfThreeNodesRestartTogetherTheSurvivorLeadsThemBackWithItsData() {
         SimulatedCluster cluster = new SimulatedCluster(11);
         TypeDescriptor students = cluster.students(1_000);

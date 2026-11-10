@@ -410,22 +410,28 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
 
     public void leave() {
         leaving = true;
-        CompletableFuture<Void> left = onLoop(() -> {
+        CompletableFuture<Boolean> left = onLoop(() -> {
             if (role == Role.MASTER && members.size() > 1) {
                 List<Member> others = without(members, self.id());
                 Set<String> synced = Set.copyOf(inSync);
                 Message.Append handOver = new Message.Append(term, self, log.lastIndex(), log.lastTerm(), List.of(), commitIndex,
                     others.stream().map(Member::id).sorted().toList(), false, clusterId, log.lastIndex());
                 return changeMembership(list -> without(list, self.id())).handle((done, error) -> null)
-                    .thenCompose(ignored -> handOver(others, synced, handOver));
+                    .thenCompose(ignored -> handOver(others, synced, handOver)).thenApply(ignored -> true);
             }
             Member current = master;
             if (role == Role.FOLLOWER && current != null && listed())
-                return transport.send(current.url(), new Message.Leave(self)).thenApply(reply -> null);
-            return CompletableFuture.completedFuture(null);
+                return transport.send(current.url(), new Message.Leave(self)).thenApply(reply -> {
+                    if (reply instanceof Message.Refused refused) throw new IllegalStateException(current.id() + " refused: " + refused.message());
+                    return true;
+                });
+            return CompletableFuture.completedFuture(false);
         });
-        try { left.get(2, TimeUnit.SECONDS); }
-        catch (Exception e) { LOG.debug("Leaving the cluster did not complete: {}", e.toString()); }
+        String afterwards = "; a new node can take its slot after dzdcache.member-timeout (" + properties.getMemberTimeout().toMillis() + " ms)";
+        try { if (left.get(2, TimeUnit.SECONDS)) LOG.info("{} left the cluster", self.id()); }
+        catch (TimeoutException e) { LOG.info("{} could not leave the cluster within 2 seconds{}", self.id(), afterwards); }
+        catch (ExecutionException e) { LOG.info("{} could not leave the cluster: {}{}", self.id(), e.getCause(), afterwards); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 
     private CompletableFuture<Void> handOver(List<Member> others, Set<String> synced, Message.Append template) {

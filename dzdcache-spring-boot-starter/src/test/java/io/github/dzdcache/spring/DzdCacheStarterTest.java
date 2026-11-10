@@ -274,8 +274,8 @@ class DzdCacheStarterTest {
             .isEqualTo(URI.create("http://10.1.2.3:7443"));
     }
 
-    @Test void aStoppedInstanceLeavesItsSlotAndDoesNotRejoinOnTheWayOut() throws Exception {
-        var started = start(Students.class, Students.class, Students.class);
+    @Test void aStoppedInstanceLeavesItsSlotAndDoesNotRejoinOnTheWayOut(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        var started = start("http", List.of("--logging.level.io.github.dzdcache.cluster=INFO"), Students.class, Students.class, Students.class);
         ConfigurableApplicationContext stopping = started.get(2);
         String id = cluster(stopping).self().id();
         stopping.close();
@@ -283,6 +283,7 @@ class DzdCacheStarterTest {
         Thread.sleep(1_500);
         assertThat(cluster(started.get(0)).view().members()).extracting(Member::id).containsExactlyInAnyOrder("node-0", "node-1");
         assertThat(cluster(started.get(0)).view().learners()).isEmpty();
+        assertThat(output.getOut()).contains(id + " left the cluster");
     }
 
     @Test void aNodeLogsTheAddressAndIdItAdvertises(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
