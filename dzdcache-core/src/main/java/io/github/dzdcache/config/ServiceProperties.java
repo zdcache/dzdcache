@@ -32,6 +32,7 @@ public class ServiceProperties {
     private String apiToken = "";
     private String clusterToken = "";
     private String clusterName = "";
+    private boolean clusterNameFromPodName;
     private Duration replicationTimeout = Duration.ofSeconds(3);
     private Duration syncInterval = Duration.ofSeconds(10);
     private final ClusterTls clusterTls = new ClusterTls();
@@ -106,6 +107,7 @@ public class ServiceProperties {
     public String getApiToken() { return apiToken; } public void setApiToken(String v) { apiToken = v; }
     public String getClusterToken() { return clusterToken; } public void setClusterToken(String v) { clusterToken = v; }
     public String getClusterName() { return clusterName; } public void setClusterName(String v) { clusterName = v; }
+    public boolean isClusterNameFromPodName() { return clusterNameFromPodName; } public void setClusterNameFromPodName(boolean v) { clusterNameFromPodName = v; }
     public Duration getReplicationTimeout() { return replicationTimeout; } public void setReplicationTimeout(Duration v) { replicationTimeout = v; }
     public Duration getSyncInterval() { return syncInterval; } public void setSyncInterval(Duration v) { syncInterval = v; }
     public ClusterTls getClusterTls() { return clusterTls; }
