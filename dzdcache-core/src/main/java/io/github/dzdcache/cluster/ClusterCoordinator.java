@@ -79,6 +79,11 @@ public final class ClusterCoordinator implements MessageHandler, AutoCloseable {
     public long staleMillis() { return control.staleMillis(); }
     public boolean servesStale() { return control.servesStale(); }
     public SchemaView publish(TypeDescriptor schema) { return control.publish(schema); }
+    public void changeSpecification(TypeDescriptor next) { control.changeSpecification(next); }
+    public CompletableFuture<Void> changeSpecificationAsync(TypeDescriptor next) { return control.changeSpecificationAsync(next); }
+    public io.github.dzdcache.cache.SpecificationState specificationState(String specification, int version) {
+        return control.specificationState(specification, version);
+    }
     public List<Outcome> put(List<PutRequest> puts) { return control.put(puts); }
     public Outcome change(EntryMutation mutation) { return control.change(mutation); }
     public CompletableFuture<SchemaView> publishAsync(TypeDescriptor schema) { return control.publishAsync(schema); }

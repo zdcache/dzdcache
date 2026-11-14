@@ -122,6 +122,18 @@ public final class CacheEngine {
         }
     }
 
+    public synchronized void checkChange(TypeDescriptor next) {
+        Objects.requireNonNull(next, "A specification is required");
+        Bucket bucket = buckets.get(new Key(next.name(), next.version()));
+        if (bucket == null) throw new CacheException(404, "Schema " + next.name() + " version " + next.version() + " is not published");
+        synchronized (bucket) {
+            SpecificationChange current = bucket.change;
+            if (current != null && !current.next.fingerprint().equals(next.fingerprint()))
+                throw new CacheException(409, "A specification change of " + next.name() + " version " + next.version() + " is already being built");
+            if (current == null && !bucket.descriptor.fingerprint().equals(next.fingerprint())) bucket.type.extend(next);
+        }
+    }
+
     public synchronized void beginChange(TypeDescriptor next) {
         Objects.requireNonNull(next, "A specification is required");
         Bucket bucket = buckets.get(new Key(next.name(), next.version()));

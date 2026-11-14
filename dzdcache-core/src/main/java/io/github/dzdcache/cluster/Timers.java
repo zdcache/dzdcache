@@ -5,5 +5,6 @@ public interface Timers extends AutoCloseable {
     long elapsed();
     void execute(Runnable task);
     void schedule(long delayMillis, Runnable task);
+    default void background(Runnable task) { Thread.ofVirtual().start(task); }
     @Override default void close() { }
 }

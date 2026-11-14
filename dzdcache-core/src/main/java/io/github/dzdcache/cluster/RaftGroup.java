@@ -105,6 +105,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private final Map<String, Member> departing = new HashMap<>();
     private final Map<String, Long> departedAt = new HashMap<>();
     private final Set<String> inSync = new HashSet<>();
+    private final Map<String, Message.SpecificationBuilt> builtHere = new HashMap<>();
+    private final Map<String, Map<String, String>> builtReports = new HashMap<>();
+    private final Map<String, Message.SpecificationBuilt> specificationChanges = new HashMap<>();
+    private final Map<String, Long> changeSeen = new HashMap<>();
+    private final Set<String> changeDecided = new HashSet<>();
+    private long nextBuildReport;
     private final Map<Long, CompletableFuture<Result>> pending = new HashMap<>();
     private final Map<Long, Result> results = new HashMap<>();
     private final Map<Long, long[]> writeTimes = new HashMap<>();
@@ -363,6 +369,20 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     }
 
     public SchemaView publish(TypeDescriptor schema) { return await(publishAsync(schema)); }
+
+    public void changeSpecification(TypeDescriptor next) { await(changeSpecificationAsync(next)); }
+
+    public CompletableFuture<Void> changeSpecificationAsync(TypeDescriptor next) {
+        return submit(new Message.ForwardSpecificationChange(next)).thenApply(result -> {
+            Outcome outcome = result.outcomes().getFirst();
+            if (outcome.status() != 200) throw new CacheException(outcome.status(), outcome.error());
+            return null;
+        });
+    }
+
+    public SpecificationState specificationState(String specification, int version) {
+        return holder.engine().specificationState(specification, version);
+    }
     public List<Outcome> put(List<PutRequest> puts) { return await(putAsync(puts)); }
     public Outcome change(EntryMutation mutation) { return await(changeAsync(mutation)); }
 
@@ -393,6 +413,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             case Message.Join join -> onJoin(join);
             case Message.Leave leave -> onLeave(leave);
             case Message.ForwardPublish request -> forwarded(request);
+            case Message.ForwardSpecificationChange request -> forwarded(request);
+            case Message.SpecificationBuilt built -> CompletableFuture.completedFuture(onSpecificationBuilt(built));
             case Message.ForwardPuts request -> forwarded(request);
             case Message.ForwardChange request -> forwarded(request);
             case Message.ForwardResize request -> forwarded(request);
@@ -602,6 +624,12 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
     private CompletableFuture<Result> local(Message request) {
         return switch (request) {
             case Message.ForwardPublish publish -> appendLocal(new LogEntry.Publish(publish.schema()));
+            case Message.ForwardSpecificationChange change -> {
+                try { holder.engine().checkChange(change.next()); }
+                catch (CacheException e) { yield CompletableFuture.failedFuture(e); }
+                catch (RuntimeException e) { yield CompletableFuture.failedFuture(new CacheException(400, e.getMessage())); }
+                yield appendLocal(new LogEntry.SpecificationChange(change.next()));
+            }
             case Message.ForwardChange change -> appendLocal(new LogEntry.Mutations(List.of(change.mutation())));
             case Message.ForwardResize resize -> resizeLocal(resize.size(), Set.copyOf(resize.leaving()));
             case Message.ForwardPuts puts -> {
@@ -669,6 +697,8 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
             }
             case MASTER -> masterTick(now);
         }
+        if (!builtHere.isEmpty()) reportBuilds(now, false);
+        if (role == Role.MASTER && !specificationChanges.isEmpty()) decideChanges(now);
         if (now >= nextFlush) { flushAccesses(); nextFlush = now + properties.getAccessFlushInterval().toMillis(); }
         timers.schedule(properties.getHeartbeatInterval().toMillis(), this::tick);
     }
@@ -870,7 +900,81 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
         return twoNode() && rank > 0 && !witnessed() ? Math.max(timeout, properties.getTwoNodeTakeover().toMillis()) : timeout;
     }
 
+    private void startBuild(CacheEngine engine, TypeDescriptor next) {
+        timers.background(() -> {
+            String error = null;
+            try { engine.buildChange(next.name(), next.version(), next.fingerprint()); }
+            catch (RuntimeException e) {
+                Throwable cause = e instanceof java.util.concurrent.CompletionException && e.getCause() != null ? e.getCause() : e;
+                error = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+            }
+            Message.SpecificationBuilt report = new Message.SpecificationBuilt(next.name(), next.version(), next.fingerprint(), self.id(), error);
+            timers.execute(() -> {
+                if (closed || holder.engine() != engine || engine.specificationState(next.name(), next.version()).change() == null) return;
+                builtHere.put(next.fingerprint(), report);
+                reportBuilds(timers.now(), true);
+            });
+        });
+    }
+
+    private void reportBuilds(long now, boolean immediately) {
+        if (!immediately && now < nextBuildReport) return;
+        nextBuildReport = now + Math.max(1_000, properties.getHeartbeatInterval().toMillis());
+        for (Message.SpecificationBuilt report : List.copyOf(builtHere.values())) {
+            if (role == Role.MASTER) onSpecificationBuilt(report);
+            else if (master != null) send(master.url(), report, reply -> { }, error -> { });
+        }
+    }
+
+    private Message onSpecificationBuilt(Message.SpecificationBuilt report) {
+        if (role != Role.MASTER || changeDecided.contains(report.fingerprint())) return new Message.Ack();
+        builtReports.computeIfAbsent(report.fingerprint(), ignored -> new HashMap<>()).put(report.member(), report.error() == null ? "" : report.error());
+        specificationChanges.putIfAbsent(report.fingerprint(), report);
+        changeSeen.putIfAbsent(report.fingerprint(), timers.now());
+        decideChanges(timers.now());
+        return new Message.Ack();
+    }
+
+    private void decideChanges(long now) {
+        long replicationTimeout = properties.getReplicationTimeout().toMillis();
+        for (Message.SpecificationBuilt change : List.copyOf(specificationChanges.values())) {
+            String fingerprint = change.fingerprint();
+            if (changeDecided.contains(fingerprint)) continue;
+            Map<String, String> reports = builtReports.getOrDefault(fingerprint, Map.of());
+            var failed = reports.entrySet().stream().filter(report -> !report.getValue().isEmpty()).findFirst();
+            if (failed.isPresent()) {
+                changeDecided.add(fingerprint);
+                appendLocal(new LogEntry.SpecificationAbandon(change.specification(), change.version(), fingerprint,
+                    failed.get().getKey() + " could not build it: " + failed.get().getValue()));
+                continue;
+            }
+            Set<String> required = new HashSet<>(Set.of(self.id()));
+            for (Member member : config().replicas()) {
+                Progress p = progress.get(member.id());
+                if (p != null && now - p.lastAck <= replicationTimeout) required.add(member.id());
+            }
+            boolean everyone = reports.keySet().containsAll(required);
+            boolean waitedLongEnough = reports.containsKey(self.id()) && now - changeSeen.get(fingerprint) > properties.getMemberTimeout().toMillis() * 2;
+            if (everyone || waitedLongEnough) {
+                changeDecided.add(fingerprint);
+                appendLocal(new LogEntry.SpecificationCommit(change.specification(), change.version(), fingerprint));
+            }
+        }
+    }
+
+    private void forgetChange(String fingerprint) {
+        builtHere.remove(fingerprint);
+        builtReports.remove(fingerprint);
+        specificationChanges.remove(fingerprint);
+        changeSeen.remove(fingerprint);
+        changeDecided.remove(fingerprint);
+    }
+
     private void becomeMaster(long now) {
+        builtReports.clear();
+        specificationChanges.clear();
+        changeSeen.clear();
+        changeDecided.clear();
         if (!votes.contains("witness")) witnessConfirmedAt = Long.MIN_VALUE / 2;
         servingFrom = timers.elapsed() + leaseWait(properties.getReadLease().toMillis());
         noopIndex = log.lastIndex() + 1;
@@ -1250,6 +1354,28 @@ final class RaftGroup implements MessageHandler, AutoCloseable {
                     yield new Result(view, List.of(Outcome.applied(null)));
                 } catch (CacheException e) { yield new Result(null, List.of(new Outcome(e.status(), e.getMessage(), null))); }
                 catch (RuntimeException e) { yield new Result(null, List.of(new Outcome(400, e.getMessage(), null))); }
+            }
+            case LogEntry.SpecificationChange change -> {
+                try {
+                    engine.beginChange(change.next());
+                    startBuild(engine, change.next());
+                    yield new Result(null, List.of(Outcome.applied(null)));
+                } catch (CacheException e) { yield new Result(null, List.of(new Outcome(e.status(), e.getMessage(), null))); }
+                catch (RuntimeException e) { yield new Result(null, List.of(new Outcome(400, e.getMessage(), null))); }
+            }
+            case LogEntry.SpecificationCommit commit -> {
+                try { engine.commitChange(commit.specification(), commit.version(), commit.fingerprint()); }
+                catch (RuntimeException e) {
+                    LOG.error("{} could not switch on the search specification of {} version {}: {}", self.id(), commit.specification(), commit.version(), e.toString());
+                }
+                forgetChange(commit.fingerprint());
+                yield new Result(null, List.of(Outcome.applied(null)));
+            }
+            case LogEntry.SpecificationAbandon abandon -> {
+                try { engine.abandonChange(abandon.specification(), abandon.version(), abandon.fingerprint(), abandon.reason()); }
+                catch (RuntimeException e) { LOG.warn("{} could not abandon a search specification change: {}", self.id(), e.toString()); }
+                forgetChange(abandon.fingerprint());
+                yield new Result(null, List.of(Outcome.applied(null)));
             }
             case LogEntry.Mutations mutations -> {
                 List<Outcome> outcomes = new ArrayList<>(mutations.mutations().size());
