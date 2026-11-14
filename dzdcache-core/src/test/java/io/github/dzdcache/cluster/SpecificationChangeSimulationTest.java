@@ -99,4 +99,28 @@ class SpecificationChangeSimulationTest {
         assertThat(cluster.runUntil(() -> back.coordinator.ready() && status(back) == SpecificationStatus.COMPLETED, 60_000)).isTrue();
         assertThat(words(cluster, back, "olsen")).containsExactly(1);
     }
+
+    @Test void everyNodeDiscoversTheSameDimensionsAndANodeJoiningLaterGetsThem() {
+        SimulatedCluster cluster = new SimulatedCluster(65);
+        SimulatedCluster.Node a = started(cluster, "a", "b", "c");
+        TypeDescriptor byDefault = JsonType.describe(cluster.mapper.readValue("{\"id\":\"students\",\"version\":1,\"identity\":\"/id\",\"capacity\":100,"
+            + "\"dimensions\":\"default\"}", SchemaDefinition.class), cluster.mapper);
+        cluster.await(a.coordinator.publishAsync(byDefault), 5_000);
+        put(cluster, cluster.nodes.get("b"), "{\"id\":1,\"name\":\"Anna Olsen\",\"age\":21}");
+        put(cluster, cluster.nodes.get("c"), "{\"id\":2,\"name\":\"Per\",\"age\":\"old\",\"address\":{\"city\":\"Oslo\"}}");
+        cluster.run(1_000);
+        var expected = discovered(cluster, a);
+        assertThat(expected).contains("age range number", "address.city prefix string");
+        for (SimulatedCluster.Node node : cluster.live()) assertThat(discovered(cluster, node)).as(node.id).isEqualTo(expected);
+        cluster.crash("c");
+        cluster.run(1_000);
+        SimulatedCluster.Node back = cluster.start("c");
+        assertThat(cluster.runUntil(() -> back.coordinator.ready() && !discovered(cluster, back).isEmpty(), 60_000)).isTrue();
+        assertThat(discovered(cluster, back)).isEqualTo(expected);
+    }
+
+    private static List<String> discovered(SimulatedCluster cluster, SimulatedCluster.Node node) {
+        SchemaDefinition definition = cluster.mapper.treeToValue(node.engine().descriptor("students", 1).definition(), SchemaDefinition.class);
+        return definition.discovered().stream().map(dimension -> dimension.name() + " " + dimension.index() + " " + dimension.type()).toList();
+    }
 }

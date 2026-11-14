@@ -72,6 +72,10 @@ public final class Definitions {
         if (definition.version() < 1) throw invalid("Schema version must be positive");
         if (definition.capacity() < 1) throw invalid("Capacity must be positive");
         if (definition.dimensions().size() > 128) throw invalid("At most 128 dimensions are supported");
+        if (definition.defaultDimensions() && !definition.dimensions().isEmpty())
+            throw invalid("Give a list of dimensions or \"default\", not both");
+        if (definition.defaultDimensions() && definition.schema() != null)
+            throw invalid("\"default\" dimensions are for a JSON type without a schema");
         if (definition.ttl() == null || definition.ttl().isBlank()) throw invalid("TTL is required (use infinite or an ISO-8601 duration)");
         if (!definition.ttl().equalsIgnoreCase("infinite")) {
             try {
@@ -121,6 +125,7 @@ public final class Definitions {
         descriptor.put("identity", definition.identity());
         descriptor.put("capacity", definition.capacity());
         descriptor.put("ttl", definition.ttl());
+        if (definition.defaultDimensions()) descriptor.put("defaultDimensions", true);
         var dimensions = descriptor.putArray("dimensions");
         definition.dimensions().stream().sorted(java.util.Comparator.comparing(DimensionDefinition::name)).forEach(dimension -> {
             ObjectNode item = dimensions.addObject();
