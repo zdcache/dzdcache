@@ -1,6 +1,7 @@
 package io.github.dzdcache.server.schema;
 
 import io.github.dzdcache.json.SchemaDefinition;
+import io.github.dzdcache.json.Definitions;
 import io.github.dzdcache.json.DimensionDefinition;
 
 import io.github.dzdcache.cache.RootType;
@@ -65,7 +66,7 @@ public final class SchemaType implements RootType<Object> {
                         builder.prefixEach(name, root -> (List<String>) (List) values.apply(root));
                     } else {
                         var value = compiled.value(path);
-                        builder.prefix(name, root -> (String) value.apply(root));
+                        builder.prefix(name, root -> (String) value.apply(root), Definitions.strategies(dimension));
                     }
                 }
                 case "range" -> {

@@ -37,6 +37,8 @@ public final class JacksonRootType<T, ID> implements RootType<T> {
         var dimensions = definition.putArray("dimensions");
         for (SearchDimension<T> dimension : specification.dimensions()) {
             ObjectNode item = dimensions.addObject().put("path", dimension.path()).put("kind", dimension.kind().name());
+            if (dimension.split() != null) item.put("split", dimension.split().name());
+            if (dimension.contains()) item.put("contains", true);
             var parts = item.putArray("parts");
             for (SearchDimension.Part part : dimension.parts()) parts.addObject().put("name", part.name()).put("kind", part.kind().name());
         }
