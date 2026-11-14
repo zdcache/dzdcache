@@ -29,19 +29,30 @@ public final class JsonType implements RootType<JsonRoot> {
 
     private record Dimension(DimensionDefinition definition, String internalName) {}
     private interface Slot { Object extract(JsonNode root); }
-    private record One(List<String> segments, String type, String path) implements Slot {
+    private record One(List<String> segments, String type, String path, boolean lenient) implements Slot {
+        One(List<String> segments, String type, String path) { this(segments, type, path, false); }
         @Override public Object extract(JsonNode root) {
-            JsonNode node = at(root, segments, path);
-            return node == null ? null : convert(node, type, path);
+            try {
+                JsonNode node = at(root, segments, path);
+                return node == null ? null : convert(node, type, path);
+            } catch (IllegalArgumentException wrongType) {
+                if (lenient) return null;
+                throw wrongType;
+            }
         }
     }
-    private record Many(List<String> segments, String type, String path) implements Slot {
+    private record Many(List<String> segments, String type, String path, boolean lenient) implements Slot {
+        Many(List<String> segments, String type, String path) { this(segments, type, path, false); }
         @Override public Object extract(JsonNode root) {
             List<Object> values = new ArrayList<>(2);
-            collect(root, segments, 0, type, path, values);
+            if (lenient) collectLeniently(root, segments, 0, type, values);
+            else collect(root, segments, 0, type, path, values);
             return List.copyOf(values);
         }
     }
+    private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_-]{0,63}");
+    static final int MOST_DISCOVERED = 128;
+    static final int MOST_DISCOVERED_PER_OBJECT = 32;
     private record Elements(List<String> array, String path, List<One> parts) implements Slot {
         @Override public Object extract(JsonNode root) {
             JsonNode elements = at(root, array, path);
@@ -71,9 +82,11 @@ public final class JsonType implements RootType<JsonRoot> {
     private final Map<String, Dimension> dimensions = new HashMap<>();
     private final SearchSpecification<JsonRoot, Object> specification;
     private final int names;
+    private final Set<Integer> absentBeforeDiscovery = new HashSet<>();
     private volatile Selection selection;
 
-    public static TypeDescriptor describe(SchemaDefinition definition, ObjectMapper mapper) {
+    public static TypeDescriptor describe(SchemaDefinition given, ObjectMapper mapper) {
+        SchemaDefinition definition = given.withDiscovered(List.of());
         validate(definition);
         return new TypeDescriptor(TypeDescriptor.JSON, definition.id(), definition.version(), definition.capacity(),
             definition.ttl(), Definitions.fingerprint(definition, mapper), mapper.valueToTree(definition));
@@ -88,16 +101,18 @@ public final class JsonType implements RootType<JsonRoot> {
         if (previous == null) {
             var builder = SearchSpecification.builder(IdentityDimension.of(JsonRoot.class, "identity", JsonRoot::identity));
             int named = 0;
-            for (DimensionDefinition dimension : definition.dimensions()) declare(builder, dimension, "d" + named++);
+            for (DimensionDefinition dimension : definition.dimensions()) declare(builder, dimension, "d" + named++, false);
+            for (DimensionDefinition dimension : definition.discovered()) declare(builder, dimension, "d" + named++, true);
             specification = builder.build();
             names = named;
             return;
         }
         slots.addAll(previous.slots);
         slotIndexes.putAll(previous.slotIndexes);
+        absentBeforeDiscovery.addAll(previous.absentBeforeDiscovery);
         SearchSpecification<JsonRoot, Object> kept = previous.specification;
         Map<String, DimensionDefinition> wanted = new HashMap<>();
-        for (DimensionDefinition dimension : definition.dimensions()) wanted.put(dimension.name(), dimension);
+        for (DimensionDefinition dimension : definition.searched()) wanted.put(dimension.name(), dimension);
         for (Dimension dimension : previous.dimensions.values()) {
             DimensionDefinition next = wanted.get(dimension.definition().name());
             if (next == null || !sameIndex(dimension.definition(), next)) { kept = kept.without(dimension.internalName()); continue; }
@@ -111,7 +126,9 @@ public final class JsonType implements RootType<JsonRoot> {
         var builder = SearchSpecification.builder(kept);
         int named = previous.names;
         for (DimensionDefinition dimension : definition.dimensions())
-            if (!dimensions.containsKey(dimension.name())) declare(builder, dimension, "d" + named++);
+            if (!dimensions.containsKey(dimension.name())) declare(builder, dimension, "d" + named++, false);
+        for (DimensionDefinition dimension : definition.discovered())
+            if (!dimensions.containsKey(dimension.name())) declare(builder, dimension, "d" + named++, true);
         specification = builder.build();
         names = named;
     }
@@ -134,11 +151,74 @@ public final class JsonType implements RootType<JsonRoot> {
     }
 
     private Object value(JsonRoot root, int slot) {
-        return root.has(slot) ? root.value(slot) : slots.get(slot).extract(tree(root));
+        if (root.has(slot)) return root.value(slot);
+        if (absentBeforeDiscovery.contains(slot)) return slots.get(slot) instanceof Many ? List.of() : null;
+        return slots.get(slot).extract(tree(root));
+    }
+
+    @Override public JsonType discover(JsonNode value) {
+        if (!definition.defaultDimensions() || value == null || !value.isObject() || definition.discovered().size() >= MOST_DISCOVERED) return null;
+        List<DimensionDefinition> found = new ArrayList<>(definition.discovered());
+        Set<String> names = new HashSet<>();
+        for (DimensionDefinition dimension : found) names.add(dimension.name());
+        for (Map.Entry<String, JsonNode> field : value.properties()) {
+            String key = field.getKey();
+            JsonNode node = field.getValue();
+            if (!PROPERTY.matcher(key).matches()) continue;
+            if (node.isObject()) {
+                for (Map.Entry<String, JsonNode> inner : node.properties())
+                    if (PROPERTY.matcher(inner.getKey()).matches())
+                        consider(found, names, key, key + "." + inner.getKey(), "/" + key + "/" + inner.getKey(), inner.getValue(), false);
+            } else if (node.isArray()) {
+                for (JsonNode element : node) {
+                    if (element.isObject()) {
+                        for (Map.Entry<String, JsonNode> inner : element.properties())
+                            if (PROPERTY.matcher(inner.getKey()).matches())
+                                consider(found, names, key, key + "." + inner.getKey(), "/" + key + "/*/" + inner.getKey(), inner.getValue(), true);
+                    } else consider(found, names, null, key, "/" + key + "/*", element, true);
+                }
+            } else consider(found, names, null, key, "/" + key, node, false);
+        }
+        return found.size() == definition.discovered().size() ? null : new JsonType(definition.withDiscovered(found), mapper, this);
+    }
+
+    private static void consider(List<DimensionDefinition> found, Set<String> names, String parent, String name, String path, JsonNode node, boolean many) {
+        if (names.contains(name) || found.size() >= MOST_DISCOVERED) return;
+        String type = node.isString() ? "string" : node.isNumber() ? "number" : node.isBoolean() ? "boolean" : null;
+        if (type == null) return;
+        if (parent != null && found.stream().filter(dimension -> dimension.name().startsWith(parent + ".")).count() >= MOST_DISCOVERED_PER_OBJECT) return;
+        String index = type.equals("string") ? "prefix" : type.equals("number") && !many ? "range" : "exact";
+        found.add(new DimensionDefinition(name, path, index, type));
+        names.add(name);
+    }
+
+    @Override public TypeDescriptor described(TypeDescriptor current) {
+        return new TypeDescriptor(current.kind(), current.name(), current.version(), current.capacity(), current.ttl(), current.fingerprint(),
+            mapper.valueToTree(definition));
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private void declare(SearchSpecification.Builder<JsonRoot, Object> builder, DimensionDefinition dimension, String name) {
+    private void declare(SearchSpecification.Builder<JsonRoot, Object> builder, DimensionDefinition dimension, String name, boolean discovered) {
+        if (discovered) {
+            dimensions.put(dimension.name(), new Dimension(dimension, name));
+            List<String> segments = Definitions.segments(dimension.path());
+            String type = type(dimension);
+            if (segments.contains("*")) {
+                int slot = slot("discovered many " + type + " " + dimension.path(), () -> new Many(segments, type, dimension.path(), true));
+                absentBeforeDiscovery.add(slot);
+                if (index(dimension).equals("exact")) builder.exactEach(name, root -> (List<Object>) value(root, slot));
+                else builder.prefixEach(name, root -> (List<String>) value(root, slot));
+            } else {
+                int slot = slot("discovered one " + type + " " + dimension.path(), () -> new One(segments, type, dimension.path(), true));
+                absentBeforeDiscovery.add(slot);
+                switch (index(dimension)) {
+                    case "exact" -> builder.exact(name, root -> value(root, slot));
+                    case "prefix" -> builder.prefix(name, root -> (String) value(root, slot));
+                    default -> builder.range(name, root -> (Comparable) value(root, slot));
+                }
+            }
+            return;
+        }
         if (!dimension.parts().isEmpty()) {
             int element = sharedElement(dimension.parts());
             if (element < 0) {
@@ -228,7 +308,7 @@ public final class JsonType implements RootType<JsonRoot> {
         if (Definitions.segments(definition.identity()).contains("*"))
             throw invalid("Identity must select one value without array traversal");
         Set<String> names = new HashSet<>();
-        for (DimensionDefinition dimension : definition.dimensions()) {
+        for (DimensionDefinition dimension : definition.searched()) {
             Definitions.validateName(names, dimension);
             if (dimension.index().equalsIgnoreCase("compound")) validateCompound(dimension);
             else {
@@ -293,6 +373,18 @@ public final class JsonType implements RootType<JsonRoot> {
             current = current.get(segment);
         }
         return current == null || current.isNull() ? null : current;
+    }
+
+    private static void collectLeniently(JsonNode node, List<String> segments, int offset, String type, List<Object> values) {
+        if (node == null || node.isNull()) return;
+        if (offset == segments.size()) {
+            try { values.add(convert(node, type, "")); } catch (IllegalArgumentException wrongType) { }
+            return;
+        }
+        String segment = segments.get(offset);
+        if (segment.equals("*")) {
+            if (node.isArray()) for (JsonNode element : node) collectLeniently(element, segments, offset + 1, type, values);
+        } else if (node.isObject()) collectLeniently(node.get(segment), segments, offset + 1, type, values);
     }
 
     private static void collect(JsonNode node, List<String> segments, int offset, String type, String path, List<Object> values) {

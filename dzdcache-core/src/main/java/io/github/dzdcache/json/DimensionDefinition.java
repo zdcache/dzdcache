@@ -22,6 +22,26 @@ public record DimensionDefinition(String name, String path, String index,
         this(name, path, index, parts, type, List.of());
     }
 
+    static List<DimensionDefinition> all(JsonNode nodes) {
+        if (nodes == null || nodes.isNull()) return List.of();
+        if (!nodes.isArray()) throw new IllegalArgumentException("Dimensions are a list");
+        List<DimensionDefinition> all = new java.util.ArrayList<>();
+        for (JsonNode node : nodes) all.add(of(node));
+        return all;
+    }
+
+    static DimensionDefinition of(JsonNode node) {
+        if (node == null || !node.isObject()) throw new IllegalArgumentException("Dimensions must not contain null entries");
+        List<JsonNode> strategies = new java.util.ArrayList<>();
+        node.path("strategies").forEach(strategies::add);
+        return new DimensionDefinition(text(node, "name"), text(node, "path"), text(node, "index"), all(node.get("parts")), text(node, "type"), strategies);
+    }
+
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asString();
+    }
+
     public DimensionDefinition(String name, String path, String index) { this(name, path, index, List.of(), null); }
     public DimensionDefinition(String name, String path, String index, List<DimensionDefinition> parts) { this(name, path, index, parts, null); }
     public DimensionDefinition(String name, String path, String index, String type) { this(name, path, index, List.of(), type); }

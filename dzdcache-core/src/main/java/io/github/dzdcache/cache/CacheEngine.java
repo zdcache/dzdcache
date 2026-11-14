@@ -97,6 +97,8 @@ public final class CacheEngine {
         return bucket.view();
     }
 
+    private record Discovered(RootType<Object> type, SearchSpecification<Object, Object> specification, TypeDescriptor descriptor) { }
+
     private final class SpecificationChange {
         final TypeDescriptor next;
         final RootType<Object> type;
@@ -290,7 +292,7 @@ public final class CacheEngine {
 
     public synchronized void endUndo() {
         recording = false;
-        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.undo.clear(); }
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.undo.clear(); bucket.forgetDiscoveryUndo(); }
         created.clear();
         saved.set(0);
         undoOverflowed = false;
@@ -302,7 +304,7 @@ public final class CacheEngine {
         if (!recording) return true;
         if (undoOverflowed) { endUndo(); return false; }
         for (Key key : created) { buckets.remove(key); unavailable.remove(key); }
-        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.rollback(); }
+        for (Bucket bucket : buckets.values()) synchronized (bucket) { bucket.rollback(); bucket.undoDiscovery(); }
         endUndo();
         return true;
     }
@@ -348,6 +350,7 @@ public final class CacheEngine {
             Object id = bucket.type.readIdentity(requested.identity());
             EntryMutation mutation = requested.revision() > 0 ? requested : bucket.withRevision(requested, id);
             if (mutation == null) return requested;
+            if (mutation.operation() == EntryMutation.Operation.PUT) bucket.discover(mutation.value());
             Prepared next = bucket.prepare(mutation, id, used);
             if (next != null) {
                 bucket.save(id);
@@ -713,6 +716,7 @@ public final class CacheEngine {
         final Set<String> fingerprints = ConcurrentHashMap.newKeySet();
         volatile SpecificationChange change;
         volatile String reason;
+        private Discovered beforeDiscovery;
         final Map<Object, Revision> revisions = new HashMap<>();
         final TreeSet<Revision> held = new TreeSet<>(LEAST_RECENTLY_USED);
         final ConcurrentHashMap<Object, Long> accesses = new ConcurrentHashMap<>();
@@ -738,6 +742,28 @@ public final class CacheEngine {
             return deadline != null && deadline <= clock.millis();
         }
         boolean staleRoot(Object root) { return !expiries.isEmpty() && stale(type.identity(root)); }
+        void discover(JsonNode value) {
+            RootType<Object> next = type.discover(value);
+            if (next == null) return;
+            if (recording && beforeDiscovery == null) beforeDiscovery = new Discovered(type, specification, descriptor);
+            cache.updateSpecification(type.javaClass(), next.specification());
+            type = next;
+            specification = next.specification();
+            descriptor = next.described(descriptor);
+        }
+
+        void forgetDiscoveryUndo() { beforeDiscovery = null; }
+
+        void undoDiscovery() {
+            Discovered before = beforeDiscovery;
+            beforeDiscovery = null;
+            if (before == null) return;
+            cache.updateSpecification(type.javaClass(), before.specification());
+            type = before.type();
+            specification = before.specification();
+            descriptor = before.descriptor();
+        }
+
         void save(Object id) {
             if (!recording || undo.containsKey(id)) return;
             if (saved.incrementAndGet() > maxRevisions) { undoOverflowed = true; return; }
