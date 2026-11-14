@@ -133,4 +133,17 @@ class SpecificationChangeTest {
             .isInstanceOf(IllegalArgumentException.class);
         assertThat(ids(engine.select("students", 1, "age", mapper.valueToTree("Oslo"), null, null, null, false))).containsExactly(1);
     }
+
+    @Test void searchingWhatIsStillBeingBuiltAnswersThatItIsNotReadyYet() {
+        engine.publish(students(NAME));
+        put(1, "Anna Olsen", 21, "Oslo");
+        engine.beginChange(students(NAME_SPLIT + "," + AGE));
+        assertThatThrownBy(() -> engine.select("students", 1, "age", null, mapper.valueToTree(20), mapper.valueToTree(30), null, false))
+            .isInstanceOfSatisfying(CacheException.class, e -> assertThat(e.status()).isEqualTo(503)).hasMessageContaining("still being built");
+        assertThatThrownBy(() -> ids(words("olsen")))
+            .isInstanceOfSatisfying(CacheException.class, e -> assertThat(e.status()).isEqualTo(503));
+        assertThatThrownBy(() -> engine.select("students", 1, "nickname", mapper.valueToTree("x"), null, null, null, false))
+            .isNotInstanceOf(CacheException.class).isInstanceOf(IllegalArgumentException.class);
+        assertThat(ids(engine.select("students", 1, "name", mapper.valueToTree("anna"), null, null, null, false))).containsExactly(1);
+    }
 }

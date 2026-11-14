@@ -451,9 +451,32 @@ public final class CacheEngine {
         Bucket bucket = bucket(specification, version);
         if (scan == (dimension != null)) throw new IllegalArgumentException(scan ? "A scan replaces 'dimension'; give one or the other" : "A dimension is required");
         if (scan && match != null) throw new IllegalArgumentException("A scan takes no 'match'");
-        RootType.Query query = scan ? null : bucket.type.query(dimension, value, from, to);
+        RootType.Query query = scan ? null : query(bucket, dimension, value, from, to);
         Predicate<Object> predicate = filter == null || filter.isNull() ? null : Filter.parse(filter).compile(bucket.type.paths());
         return new Selection(scan ? null : query.dimension(), scan ? null : matching(query.values(), match, maxEdits), predicate, scan);
+    }
+
+    private static RootType.Query query(Bucket bucket, String dimension, JsonNode value, JsonNode from, JsonNode to) {
+        try { return bucket.type.query(dimension, value, from, to); }
+        catch (IllegalArgumentException unknown) {
+            SpecificationChange change = bucket.change;
+            if (change == null) throw unknown;
+            try { change.type.query(dimension, value, from, to); }
+            catch (IllegalArgumentException alsoUnknown) { throw unknown; }
+            throw stillBuilding(dimension);
+        }
+    }
+
+    private static CacheException stillBuilding(String dimension) {
+        return new CacheException(503, "Search dimension '" + dimension + "' is still being built; its specification is UPDATING");
+    }
+
+    private static <T> T orStillBuilding(Bucket bucket, String dimension, java.util.function.Supplier<T> search) {
+        try { return search.get(); }
+        catch (io.github.zdcache.UndeclaredSearchStrategyException | io.github.zdcache.SearchDimensionNotReadyException e) {
+            if (bucket.change != null) throw stillBuilding(dimension);
+            throw e;
+        }
     }
 
     static Object[] matching(Object[] values, String match, Integer maxEdits) {
@@ -484,7 +507,7 @@ public final class CacheEngine {
     }
 
     private Iterable<Object> hits(Bucket bucket, String dimension, Object[] values, boolean scan) {
-        if (!scan) return bucket.cache.search(bucket.type.javaClass(), dimension, values);
+        if (!scan) return orStillBuilding(bucket, dimension, () -> bucket.cache.search(bucket.type.javaClass(), dimension, values));
         List<Object> roots = new ArrayList<>();
         synchronized (bucket) {
             for (Revision revision : bucket.revisions.values()) {
@@ -540,7 +563,8 @@ public final class CacheEngine {
         Bucket bucket = bucket(specification, version);
         int allowed = allowed(limit);
         List<Ranked<Object>> found = new ArrayList<>();
-        for (Ranked<Object> ranked : bucket.cache.searchRanked(bucket.type.javaClass(), selection.dimension(), selection.values())) {
+        for (Ranked<Object> ranked : orStillBuilding(bucket, selection.dimension(),
+                () -> bucket.cache.searchRanked(bucket.type.javaClass(), selection.dimension(), selection.values()))) {
             if (!accepted(bucket, ranked.result(), selection.filter())) continue;
             if (found.size() == allowed) {
                 if (limit != null) break;
