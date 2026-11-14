@@ -1,14 +1,13 @@
 package io.github.dzdcache.json;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.List;
 import tools.jackson.databind.JsonNode;
 
 /** Paths use JSON Pointer syntax, with '*' for traversal through array elements. */
 public record DimensionDefinition(String name, String path, String index,
-                                  @JsonInclude(JsonInclude.Include.NON_EMPTY) List<DimensionDefinition> parts,
-                                  @JsonInclude(JsonInclude.Include.NON_EMPTY) String type,
-                                  @JsonInclude(JsonInclude.Include.NON_EMPTY) List<JsonNode> strategies) {
+                                  List<DimensionDefinition> parts,
+                                  String type,
+                                  List<JsonNode> strategies) {
     public DimensionDefinition {
         if (parts != null && parts.stream().anyMatch(java.util.Objects::isNull))
             throw new IllegalArgumentException("Compound parts must not contain null entries");

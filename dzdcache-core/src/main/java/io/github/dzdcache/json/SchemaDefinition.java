@@ -3,7 +3,6 @@ package io.github.dzdcache.json;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonGetter;
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.ArrayList;
 import java.util.List;
@@ -45,14 +44,14 @@ public record SchemaDefinition(String id, int version, JsonNode schema, String i
 
     @JsonGetter("id") @Override public String id() { return id; }
     @JsonGetter("version") @Override public int version() { return version; }
-    @JsonGetter("schema") @JsonInclude(JsonInclude.Include.NON_NULL) @Override public JsonNode schema() {
+    @JsonGetter("schema") @Override public JsonNode schema() {
         return schema == null ? null : schema.deepCopy();
     }
     @JsonGetter("identity") @Override public String identity() { return identity; }
     @JsonGetter("dimensions") Object dimensionsAsJson() { return defaultDimensions ? DEFAULT : dimensions; }
     @JsonGetter("capacity") @Override public int capacity() { return capacity; }
     @JsonGetter("ttl") @Override public String ttl() { return ttl; }
-    @JsonGetter("discovered") @JsonInclude(JsonInclude.Include.NON_EMPTY) @Override public List<DimensionDefinition> discovered() { return discovered; }
+    @JsonGetter("discovered") @Override public List<DimensionDefinition> discovered() { return discovered; }
 
     public List<DimensionDefinition> searched() {
         if (discovered.isEmpty()) return dimensions;

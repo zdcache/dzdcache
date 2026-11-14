@@ -229,7 +229,8 @@ class JsonTypeTest {
         TypeDescriptor descriptor = factory.describe(definition);
         assertThat(descriptor.kind()).isEqualTo(TypeDescriptor.JSON);
         assertThat(descriptor.fingerprint()).isEqualTo(compiler.fingerprint(definition));
-        assertThat(descriptor.definition().has("schema")).isFalse();
+        assertThat(descriptor.definition().has("schema")).isTrue();
+        assertThat(descriptor.definition().path("schema").isNull()).isTrue();
         assertThat(descriptor.definition().path("dimensions").get(0).path("type").asText()).isEqualTo("string");
         assertThat(factory.create(descriptor)).isInstanceOf(JsonType.class);
         TypeDescriptor tampered = new TypeDescriptor(descriptor.kind(), descriptor.name(), descriptor.version(), descriptor.capacity(),

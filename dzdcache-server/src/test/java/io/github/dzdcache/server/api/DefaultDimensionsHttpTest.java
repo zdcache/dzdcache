@@ -25,7 +25,10 @@ class DefaultDimensionsHttpTest {
             assertThat(send(http, port, "POST", "/cache/schemas",
                 "{\"id\":\"students\",\"version\":1,\"identity\":\"/id\",\"capacity\":100,\"ttl\":\"infinite\",\"dimensions\":\"default\"}").statusCode()).isEqualTo(201);
             assertThat(send(http, port, "POST", "/cache/entries", "{\"specification\":\"students\",\"schemaVersion\":1,\"revision\":1,\"value\":"
-                + "{\"id\":1,\"name\":\"Anna Olsen\",\"address\":{\"city\":\"Oslo\"}}}").statusCode()).isEqualTo(200);
+                + "{\"id\":1,\"name\":\"Anna Olsen\",\"nickname\":null,\"address\":{\"city\":\"Oslo\"}}}").statusCode()).isEqualTo(200);
+            JsonNode stored = JSON.readTree(send(http, port, "POST", "/cache/entries/get", "{\"specification\":\"students\",\"schemaVersion\":1,\"identity\":1}").body());
+            assertThat(stored.has("nickname")).as("a null field is kept").isTrue();
+            assertThat(stored.path("nickname").isNull()).isTrue();
             JsonNode definition = JSON.readTree(send(http, port, "GET", "/cache/schemas/students/1", null).body());
             assertThat(definition.path("dimensions").asString()).isEqualTo("default");
             assertThat(definition.path("discovered").valueStream().map(dimension -> dimension.path("name").asString()).toList())
