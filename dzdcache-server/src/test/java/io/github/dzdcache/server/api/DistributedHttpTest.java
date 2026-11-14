@@ -70,9 +70,12 @@ class DistributedHttpTest {
             assertThat(post(http, b, "/cache/search", born.replace("\"1800-01-01T00:00:00Z\"", "1800"), "client").statusCode()).isEqualTo(400);
             assertThat(post(http, a, "/cache/entries", people.replace("\"Ada\"", "7"), "client").statusCode()).isEqualTo(400);
             var definition = JSON.readTree(get(http, b, "/cache/schemas/people/1").body());
-            assertThat(definition.has("schema")).isFalse();
+            assertThat(definition.has("schema")).isTrue();
+            assertThat(definition.path("schema").isNull()).isTrue();
             assertThat(definition.path("dimensions").get(0).path("type").asText()).isEqualTo("string");
-            assertThat(JSON.readTree(get(http, b, "/cache/schemas/students/1").body()).path("dimensions").get(0).has("type")).isFalse();
+            var schemaDimension = JSON.readTree(get(http, b, "/cache/schemas/students/1").body()).path("dimensions").get(0);
+            assertThat(schemaDimension.has("type")).isTrue();
+            assertThat(schemaDimension.path("type").isNull()).isTrue();
             assertThat(get(http, b, "/cache/schemas").body()).contains("\"people\"").contains("\"students\"");
             String batch = "[" + put(1, "Rome").replace("42", "43").replace("female", "male") + "," + put(1, "Rome").replace("42", "44").replace("female", "male") + "," + put(1, "Rome").replace("\"students\"", "\"unknown\"") + "]";
             var outcomes = JSON.readTree(post(http, a, "/cache/entries/batch", batch, "client").body());

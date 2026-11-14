@@ -1,6 +1,5 @@
 package io.github.dzdcache.server.api;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import io.github.dzdcache.cache.*;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.dzdcache.json.SchemaDefinition;
@@ -56,7 +55,6 @@ public class CacheController {
         cluster.changeSpecification(schemas.describe(schema));
         return specificationStatus(id, version);
     }
-    @JsonInclude(JsonInclude.Include.NON_NULL)
     public record SpecificationStatusView(SpecificationStatus status, SchemaDefinition change, String reason) {}
     @GetMapping("/schemas/{id}/{version}/status") public SpecificationStatusView specificationStatus(@PathVariable String id, @PathVariable int version) {
         cluster.awaitCurrent();

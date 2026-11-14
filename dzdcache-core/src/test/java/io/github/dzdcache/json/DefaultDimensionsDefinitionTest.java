@@ -2,6 +2,7 @@ package io.github.dzdcache.json;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,7 +19,11 @@ class DefaultDimensionsDefinitionTest {
         assertThat(list.dimensions()).hasSize(1);
         assertThat(list.dimensions().getFirst().strategies()).hasSize(1);
         assertThat(mapper.readValue(mapper.writeValueAsString(list), SchemaDefinition.class)).isEqualTo(list);
-        assertThat(mapper.readTree(mapper.writeValueAsString(list)).has("discovered")).isFalse();
+        JsonNode written = mapper.readTree(mapper.writeValueAsString(list));
+        assertThat(written.has("discovered")).as("empty fields are written, not left out").isTrue();
+        assertThat(written.has("schema")).isTrue();
+        assertThat(written.path("schema").isNull()).isTrue();
+        assertThat(written.path("dimensions").get(0).has("parts")).isTrue();
 
         SchemaDefinition byDefault = mapper.readValue("{\"id\":\"students\",\"version\":1,\"identity\":\"/id\",\"dimensions\":\"default\",\"capacity\":10}", SchemaDefinition.class);
         assertThat(byDefault.defaultDimensions()).isTrue();
