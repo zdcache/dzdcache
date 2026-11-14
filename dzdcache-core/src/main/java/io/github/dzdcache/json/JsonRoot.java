@@ -10,4 +10,5 @@ public final class JsonRoot {
     public Object identity() { return identity; }
     byte[] json() { return json; }
     Object value(int slot) { return values[slot]; }
+    boolean has(int slot) { return slot < values.length; }
 }
