@@ -16,6 +16,10 @@ public interface RootType<T> {
     T read(JsonNode value);
     JsonNode write(T root);
 
+    default RootType<T> extend(TypeDescriptor next) {
+        throw new IllegalArgumentException("The search specification of " + javaClass().getSimpleName() + " cannot change while it is cached");
+    }
+
     default Query query(String dimension, JsonNode value, JsonNode from, JsonNode to) {
         throw new IllegalArgumentException("Searches on " + javaClass().getSimpleName() + " take Java values");
     }

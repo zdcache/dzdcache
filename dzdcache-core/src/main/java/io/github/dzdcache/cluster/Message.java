@@ -13,6 +13,8 @@ import java.util.List;
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
     @JsonSubTypes.Type(value = Message.Append.class, name = "append"),
+    @JsonSubTypes.Type(value = Message.ForwardSpecificationChange.class, name = "forward-specification-change"),
+    @JsonSubTypes.Type(value = Message.SpecificationBuilt.class, name = "specification-built"),
     @JsonSubTypes.Type(value = Message.Appended.class, name = "appended"),
     @JsonSubTypes.Type(value = Message.Vote.class, name = "vote"),
     @JsonSubTypes.Type(value = Message.Voted.class, name = "voted"),
@@ -53,6 +55,8 @@ public sealed interface Message {
     record Join(Member member, int clusterSize, boolean learner) implements Message { }
     record Leave(Member member) implements Message { }
     record ForwardPublish(TypeDescriptor schema) implements Message { }
+    record ForwardSpecificationChange(TypeDescriptor next) implements Message { }
+    record SpecificationBuilt(String specification, int version, String fingerprint, String member, String error) implements Message { }
     record ForwardPuts(List<PutRequest> puts) implements Message { }
     record ForwardChange(EntryMutation mutation) implements Message { }
     record ForwardResize(int size, List<String> leaving) implements Message { }

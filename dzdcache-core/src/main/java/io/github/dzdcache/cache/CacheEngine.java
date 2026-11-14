@@ -1,6 +1,7 @@
 package io.github.dzdcache.cache;
 
 import io.github.zdcache.Match;
+import io.github.zdcache.PreparedSpecification;
 import io.github.zdcache.Ranked;
 import io.github.zdcache.SearchSpecification;
 import io.github.zdcache.ZDCache;
@@ -10,6 +11,7 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.function.Predicate;
@@ -75,7 +77,7 @@ public final class CacheEngine {
         TypeDescriptor known = existing != null ? existing.descriptor : unavailable.get(key);
         // Avoid recompiling and leaking classloaders on ordinary replicated puts.
         if (known != null) {
-            if (!known.fingerprint().equals(descriptor.fingerprint()))
+            if (!known.fingerprint().equals(descriptor.fingerprint()) && (existing == null || !existing.fingerprints.contains(descriptor.fingerprint())))
                 throw new CacheException(409, "Schema version already has a different definition; publish a new version");
             return existing != null ? existing.view() : unavailableView(known);
         }
@@ -93,6 +95,101 @@ public final class CacheEngine {
         buckets.put(key, bucket);
         if (recording) created.add(key);
         return bucket.view();
+    }
+
+    private final class SpecificationChange {
+        final TypeDescriptor next;
+        final RootType<Object> type;
+        private CompletableFuture<PreparedSpecification> prepared;
+
+        SpecificationChange(TypeDescriptor next, RootType<Object> type) { this.next = next; this.type = type; }
+
+        CompletableFuture<PreparedSpecification> prepare(Bucket bucket) {
+            CompletableFuture<PreparedSpecification> started;
+            synchronized (this) {
+                if (prepared != null) return prepared;
+                prepared = started = new CompletableFuture<>();
+            }
+            try { started.complete(bucket.cache.prepareSpecification(bucket.type.javaClass(), type.specification())); }
+            catch (RuntimeException e) { started.completeExceptionally(e); }
+            return started;
+        }
+
+        void abandon() {
+            CompletableFuture<PreparedSpecification> started;
+            synchronized (this) { started = prepared; }
+            if (started != null) started.thenAccept(PreparedSpecification::abandon);
+        }
+    }
+
+    public synchronized void checkChange(TypeDescriptor next) {
+        Objects.requireNonNull(next, "A specification is required");
+        Bucket bucket = buckets.get(new Key(next.name(), next.version()));
+        if (bucket == null) throw new CacheException(404, "Schema " + next.name() + " version " + next.version() + " is not published");
+        synchronized (bucket) {
+            SpecificationChange current = bucket.change;
+            if (current != null && !current.next.fingerprint().equals(next.fingerprint()))
+                throw new CacheException(409, "A specification change of " + next.name() + " version " + next.version() + " is already being built");
+            if (current == null && !bucket.descriptor.fingerprint().equals(next.fingerprint())) bucket.type.extend(next);
+        }
+    }
+
+    public synchronized void beginChange(TypeDescriptor next) {
+        Objects.requireNonNull(next, "A specification is required");
+        Bucket bucket = buckets.get(new Key(next.name(), next.version()));
+        if (bucket == null) throw new CacheException(404, "Schema " + next.name() + " version " + next.version() + " is not published here");
+        synchronized (bucket) {
+            SpecificationChange current = bucket.change;
+            if (current != null) {
+                if (current.next.fingerprint().equals(next.fingerprint())) return;
+                throw new CacheException(409, "A specification change of " + next.name() + " version " + next.version() + " is already being built");
+            }
+            if (bucket.descriptor.fingerprint().equals(next.fingerprint())) return;
+            bucket.change = new SpecificationChange(next, bucket.type.extend(next));
+            bucket.reason = null;
+        }
+    }
+
+    public void buildChange(String specification, int version, String fingerprint) {
+        Bucket bucket = bucket(specification, version);
+        SpecificationChange change = bucket.change;
+        if (change == null || !change.next.fingerprint().equals(fingerprint)) return;
+        change.prepare(bucket).join();
+    }
+
+    public void commitChange(String specification, int version, String fingerprint) {
+        Bucket bucket = bucket(specification, version);
+        SpecificationChange change = bucket.change;
+        if (change == null || !change.next.fingerprint().equals(fingerprint)) return;
+        PreparedSpecification prepared = change.prepare(bucket).join();
+        synchronized (bucket) {
+            if (bucket.change != change) return;
+            prepared.commit();
+            bucket.type = change.type;
+            bucket.specification = change.type.specification();
+            bucket.descriptor = change.next;
+            bucket.fingerprints.add(fingerprint);
+            bucket.change = null;
+        }
+    }
+
+    public void abandonChange(String specification, int version, String fingerprint, String reason) {
+        Bucket bucket = bucket(specification, version);
+        synchronized (bucket) {
+            SpecificationChange change = bucket.change;
+            if (change == null || !change.next.fingerprint().equals(fingerprint)) return;
+            change.abandon();
+            bucket.change = null;
+            bucket.reason = reason;
+        }
+    }
+
+    public SpecificationState specificationState(String specification, int version) {
+        Bucket bucket = bucket(specification, version);
+        SpecificationChange change = bucket.change;
+        if (change != null) return new SpecificationState(SpecificationStatus.UPDATING, change.next, bucket.reason);
+        SpecificationStatus status = bucket.specification.searchable() ? SpecificationStatus.COMPLETED : SpecificationStatus.NONE_REGISTERED;
+        return new SpecificationState(status, null, bucket.reason);
     }
 
     private RootType<?> resolve(Key key, TypeDescriptor descriptor) {
@@ -354,9 +451,32 @@ public final class CacheEngine {
         Bucket bucket = bucket(specification, version);
         if (scan == (dimension != null)) throw new IllegalArgumentException(scan ? "A scan replaces 'dimension'; give one or the other" : "A dimension is required");
         if (scan && match != null) throw new IllegalArgumentException("A scan takes no 'match'");
-        RootType.Query query = scan ? null : bucket.type.query(dimension, value, from, to);
+        RootType.Query query = scan ? null : query(bucket, dimension, value, from, to);
         Predicate<Object> predicate = filter == null || filter.isNull() ? null : Filter.parse(filter).compile(bucket.type.paths());
         return new Selection(scan ? null : query.dimension(), scan ? null : matching(query.values(), match, maxEdits), predicate, scan);
+    }
+
+    private static RootType.Query query(Bucket bucket, String dimension, JsonNode value, JsonNode from, JsonNode to) {
+        try { return bucket.type.query(dimension, value, from, to); }
+        catch (IllegalArgumentException unknown) {
+            SpecificationChange change = bucket.change;
+            if (change == null) throw unknown;
+            try { change.type.query(dimension, value, from, to); }
+            catch (IllegalArgumentException alsoUnknown) { throw unknown; }
+            throw stillBuilding(dimension);
+        }
+    }
+
+    private static CacheException stillBuilding(String dimension) {
+        return new CacheException(503, "Search dimension '" + dimension + "' is still being built; its specification is UPDATING");
+    }
+
+    private static <T> T orStillBuilding(Bucket bucket, String dimension, java.util.function.Supplier<T> search) {
+        try { return search.get(); }
+        catch (io.github.zdcache.UndeclaredSearchStrategyException | io.github.zdcache.SearchDimensionNotReadyException e) {
+            if (bucket.change != null) throw stillBuilding(dimension);
+            throw e;
+        }
     }
 
     static Object[] matching(Object[] values, String match, Integer maxEdits) {
@@ -387,7 +507,7 @@ public final class CacheEngine {
     }
 
     private Iterable<Object> hits(Bucket bucket, String dimension, Object[] values, boolean scan) {
-        if (!scan) return bucket.cache.search(bucket.type.javaClass(), dimension, values);
+        if (!scan) return orStillBuilding(bucket, dimension, () -> bucket.cache.search(bucket.type.javaClass(), dimension, values));
         List<Object> roots = new ArrayList<>();
         synchronized (bucket) {
             for (Revision revision : bucket.revisions.values()) {
@@ -443,7 +563,8 @@ public final class CacheEngine {
         Bucket bucket = bucket(specification, version);
         int allowed = allowed(limit);
         List<Ranked<Object>> found = new ArrayList<>();
-        for (Ranked<Object> ranked : bucket.cache.searchRanked(bucket.type.javaClass(), selection.dimension(), selection.values())) {
+        for (Ranked<Object> ranked : orStillBuilding(bucket, selection.dimension(),
+                () -> bucket.cache.searchRanked(bucket.type.javaClass(), selection.dimension(), selection.values()))) {
             if (!accepted(bucket, ranked.result(), selection.filter())) continue;
             if (found.size() == allowed) {
                 if (limit != null) break;
@@ -585,10 +706,13 @@ public final class CacheEngine {
     private record Prepared(Object id, Object root, Digest digest, JsonNode canonical) {}
 
     private final class Bucket {
-        final TypeDescriptor descriptor;
-        final RootType<Object> type;
+        volatile TypeDescriptor descriptor;
+        volatile RootType<Object> type;
         final ZDCache cache;
-        final SearchSpecification<Object, Object> specification;
+        volatile SearchSpecification<Object, Object> specification;
+        final Set<String> fingerprints = ConcurrentHashMap.newKeySet();
+        volatile SpecificationChange change;
+        volatile String reason;
         final Map<Object, Revision> revisions = new HashMap<>();
         final TreeSet<Revision> held = new TreeSet<>(LEAST_RECENTLY_USED);
         final ConcurrentHashMap<Object, Long> accesses = new ConcurrentHashMap<>();
@@ -600,6 +724,7 @@ public final class CacheEngine {
             this.descriptor = descriptor; this.type = type;
             this.cache = ZDCache.builder().defaultMaxPerType(Integer.MAX_VALUE).build();
             this.specification = type.specification();
+            fingerprints.add(descriptor.fingerprint());
             cache.register(specification);
         }
         Object find(Object id) {

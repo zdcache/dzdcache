@@ -1,5 +1,6 @@
 package io.github.dzdcache.server.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.github.dzdcache.cache.*;
 import io.github.dzdcache.cluster.ClusterCoordinator;
 import io.github.dzdcache.json.SchemaDefinition;
@@ -46,6 +47,22 @@ public class CacheController {
         cluster.awaitCurrent();
         return engines.engine().descriptors().stream().filter(ServerTypeFactory::describes)
             .map(type -> mapper.treeToValue(type.definition(), SchemaDefinition.class)).toList();
+    }
+    @PutMapping("/schemas/{id}/{version}") @ResponseStatus(HttpStatus.ACCEPTED)
+    public SpecificationStatusView changeSpecification(@PathVariable String id, @PathVariable int version, @RequestBody SchemaDefinition schema) {
+        if (schema == null) throw new IllegalArgumentException("A schema definition is required");
+        if (!id.equals(schema.id()) || version != schema.version())
+            throw new IllegalArgumentException("The definition is for " + schema.id() + " version " + schema.version() + ", not " + id + " version " + version);
+        cluster.changeSpecification(schemas.describe(schema));
+        return specificationStatus(id, version);
+    }
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record SpecificationStatusView(SpecificationStatus status, SchemaDefinition change, String reason) {}
+    @GetMapping("/schemas/{id}/{version}/status") public SpecificationStatusView specificationStatus(@PathVariable String id, @PathVariable int version) {
+        cluster.awaitCurrent();
+        var state = engines.engine().specificationState(id, version);
+        return new SpecificationStatusView(state.status(),
+            state.change() == null ? null : mapper.treeToValue(state.change().definition(), SchemaDefinition.class), state.reason());
     }
     @GetMapping("/schemas/{id}/{version}") public SchemaDefinition schema(@PathVariable String id, @PathVariable int version) {
         cluster.awaitCurrent();

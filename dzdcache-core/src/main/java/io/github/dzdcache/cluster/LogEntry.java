@@ -17,8 +17,12 @@ public record LogEntry(long index, long term, long at, Payload payload, int byte
         @JsonSubTypes.Type(value = Accesses.class, name = "accesses"),
         @JsonSubTypes.Type(value = Membership.class, name = "membership"),
         @JsonSubTypes.Type(value = Sweep.class, name = "sweep"),
-        @JsonSubTypes.Type(value = Noop.class, name = "noop")})
-    public sealed interface Payload permits Publish, Mutations, Accesses, Membership, Sweep, Noop { }
+        @JsonSubTypes.Type(value = Noop.class, name = "noop"),
+        @JsonSubTypes.Type(value = SpecificationChange.class, name = "specification-change"),
+        @JsonSubTypes.Type(value = SpecificationCommit.class, name = "specification-commit"),
+        @JsonSubTypes.Type(value = SpecificationAbandon.class, name = "specification-abandon")})
+    public sealed interface Payload permits Publish, Mutations, Accesses, Membership, Sweep, Noop,
+        SpecificationChange, SpecificationCommit, SpecificationAbandon { }
     public record Publish(TypeDescriptor schema) implements Payload { }
     public record Mutations(List<EntryMutation> mutations) implements Payload { }
     public record Accesses(List<Access> accesses) implements Payload { }
@@ -30,4 +34,7 @@ public record LogEntry(long index, long term, long at, Payload payload, int byte
     }
     public record Sweep() implements Payload { }
     public record Noop() implements Payload { }
+    public record SpecificationChange(TypeDescriptor next) implements Payload { }
+    public record SpecificationCommit(String specification, int version, String fingerprint) implements Payload { }
+    public record SpecificationAbandon(String specification, int version, String fingerprint, String reason) implements Payload { }
 }

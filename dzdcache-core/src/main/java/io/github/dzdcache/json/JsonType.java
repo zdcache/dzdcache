@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Supplier;
 import tools.jackson.core.JsonGenerator;
@@ -69,6 +70,7 @@ public final class JsonType implements RootType<JsonRoot> {
     private final Map<String, Integer> slotIndexes = new HashMap<>();
     private final Map<String, Dimension> dimensions = new HashMap<>();
     private final SearchSpecification<JsonRoot, Object> specification;
+    private final int names;
     private volatile Selection selection;
 
     public static TypeDescriptor describe(SchemaDefinition definition, ObjectMapper mapper) {
@@ -77,51 +79,101 @@ public final class JsonType implements RootType<JsonRoot> {
             definition.ttl(), Definitions.fingerprint(definition, mapper), mapper.valueToTree(definition));
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public JsonType(SchemaDefinition definition, ObjectMapper mapper) {
+    public JsonType(SchemaDefinition definition, ObjectMapper mapper) { this(definition, mapper, null); }
+
+    private JsonType(SchemaDefinition definition, ObjectMapper mapper, JsonType previous) {
         validate(definition);
         this.definition = definition; this.mapper = mapper;
         this.identity = Definitions.segments(definition.identity());
-        var builder = SearchSpecification.builder(IdentityDimension.of(JsonRoot.class, "identity", JsonRoot::identity));
-        for (DimensionDefinition dimension : definition.dimensions()) {
-            String name = "d" + dimensions.size();
-            if (!dimension.parts().isEmpty()) {
-                int element = sharedElement(dimension.parts());
-                if (element < 0) {
-                    builder.compound(name, parts -> declare(parts, dimension.parts()));
-                    dimensions.put(dimension.name(), new Dimension(dimension, name));
-                } else {
-                    int slot = elements(dimension.parts(), element);
-                    builder.each(name, root -> (List<Object[]>) root.value(slot), nested -> nested.compound("c", parts -> {
-                        for (int i = 0; i < dimension.parts().size(); i++) {
-                            int position = i;
-                            switch (index(dimension.parts().get(i))) {
-                                case "exact" -> parts.exact("p" + i, tuple -> tuple[position]);
-                                case "prefix" -> parts.prefix("p" + i, tuple -> (String) tuple[position]);
-                                default -> parts.range("p" + i, tuple -> (Comparable) tuple[position]);
-                            }
-                        }
-                    }));
-                    dimensions.put(dimension.name(), new Dimension(dimension, name + ".c"));
-                }
-                continue;
-            }
-            dimensions.put(dimension.name(), new Dimension(dimension, name));
-            List<String> segments = Definitions.segments(dimension.path());
-            if (segments.contains("*")) {
-                int slot = many(dimension);
-                if (index(dimension).equals("exact")) builder.exactEach(name, root -> (List<Object>) root.value(slot));
-                else builder.prefixEach(name, root -> (List<String>) root.value(slot));
-                continue;
-            }
-            int slot = one(dimension);
-            switch (index(dimension)) {
-                case "exact" -> builder.exact(name, root -> root.value(slot));
-                case "prefix" -> builder.prefix(name, root -> (String) root.value(slot), Definitions.strategies(dimension));
-                default -> builder.range(name, root -> (Comparable) root.value(slot));
-            }
+        if (previous == null) {
+            var builder = SearchSpecification.builder(IdentityDimension.of(JsonRoot.class, "identity", JsonRoot::identity));
+            int named = 0;
+            for (DimensionDefinition dimension : definition.dimensions()) declare(builder, dimension, "d" + named++);
+            specification = builder.build();
+            names = named;
+            return;
         }
+        slots.addAll(previous.slots);
+        slotIndexes.putAll(previous.slotIndexes);
+        SearchSpecification<JsonRoot, Object> kept = previous.specification;
+        Map<String, DimensionDefinition> wanted = new HashMap<>();
+        for (DimensionDefinition dimension : definition.dimensions()) wanted.put(dimension.name(), dimension);
+        for (Dimension dimension : previous.dimensions.values()) {
+            DimensionDefinition next = wanted.get(dimension.definition().name());
+            if (next == null || !sameIndex(dimension.definition(), next)) { kept = kept.without(dimension.internalName()); continue; }
+            List<String> had = Definitions.describe(Definitions.strategies(dimension.definition()));
+            List<String> has = Definitions.describe(Definitions.strategies(next));
+            if (!has.containsAll(had))
+                throw invalid("A strategy cannot be taken off '" + next.name() + "'; remove the dimension and add it again instead");
+            if (!has.equals(had)) kept = kept.withStrategies(dimension.internalName(), Definitions.strategies(next));
+            dimensions.put(next.name(), new Dimension(next, dimension.internalName()));
+        }
+        var builder = SearchSpecification.builder(kept);
+        int named = previous.names;
+        for (DimensionDefinition dimension : definition.dimensions())
+            if (!dimensions.containsKey(dimension.name())) declare(builder, dimension, "d" + named++);
         specification = builder.build();
+        names = named;
+    }
+
+    private static boolean sameIndex(DimensionDefinition before, DimensionDefinition after) {
+        return Objects.equals(before.path(), after.path()) && before.index().equalsIgnoreCase(after.index())
+            && Objects.equals(before.type() == null ? null : before.type().toLowerCase(Locale.ROOT), after.type() == null ? null : after.type().toLowerCase(Locale.ROOT))
+            && before.parts().equals(after.parts());
+    }
+
+    public JsonType extend(SchemaDefinition next) {
+        if (!next.id().equals(definition.id()) || next.version() != definition.version() || !next.identity().equals(definition.identity())
+                || next.capacity() != definition.capacity() || !next.ttl().equalsIgnoreCase(definition.ttl()))
+            throw invalid("Only the dimensions of a published version can change; publish a new version to change anything else");
+        return new JsonType(next, mapper, this);
+    }
+
+    @Override public RootType<JsonRoot> extend(TypeDescriptor next) {
+        return extend(mapper.treeToValue(next.definition(), SchemaDefinition.class));
+    }
+
+    private Object value(JsonRoot root, int slot) {
+        return root.has(slot) ? root.value(slot) : slots.get(slot).extract(tree(root));
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void declare(SearchSpecification.Builder<JsonRoot, Object> builder, DimensionDefinition dimension, String name) {
+        if (!dimension.parts().isEmpty()) {
+            int element = sharedElement(dimension.parts());
+            if (element < 0) {
+                builder.compound(name, parts -> declare(parts, dimension.parts()));
+                dimensions.put(dimension.name(), new Dimension(dimension, name));
+            } else {
+                int slot = elements(dimension.parts(), element);
+                builder.each(name, root -> (List<Object[]>) value(root, slot), nested -> nested.compound("c", parts -> {
+                    for (int i = 0; i < dimension.parts().size(); i++) {
+                        int position = i;
+                        switch (index(dimension.parts().get(i))) {
+                            case "exact" -> parts.exact("p" + i, tuple -> tuple[position]);
+                            case "prefix" -> parts.prefix("p" + i, tuple -> (String) tuple[position]);
+                            default -> parts.range("p" + i, tuple -> (Comparable) tuple[position]);
+                        }
+                    }
+                }));
+                dimensions.put(dimension.name(), new Dimension(dimension, name + ".c"));
+            }
+            return;
+        }
+        dimensions.put(dimension.name(), new Dimension(dimension, name));
+        List<String> segments = Definitions.segments(dimension.path());
+        if (segments.contains("*")) {
+            int slot = many(dimension);
+            if (index(dimension).equals("exact")) builder.exactEach(name, root -> (List<Object>) value(root, slot));
+            else builder.prefixEach(name, root -> (List<String>) value(root, slot));
+            return;
+        }
+        int slot = one(dimension);
+        switch (index(dimension)) {
+            case "exact" -> builder.exact(name, root -> value(root, slot));
+            case "prefix" -> builder.prefix(name, root -> (String) value(root, slot), Definitions.strategies(dimension));
+            default -> builder.range(name, root -> (Comparable) value(root, slot));
+        }
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -131,14 +183,14 @@ public final class JsonType implements RootType<JsonRoot> {
             String name = "p" + i;
             if (Definitions.segments(part.path()).contains("*")) {
                 int slot = many(part);
-                builder.exactEach(name, root -> (List<Object>) root.value(slot));
+                builder.exactEach(name, root -> (List<Object>) value(root, slot));
                 continue;
             }
             int slot = one(part);
             switch (index(part)) {
-                case "exact" -> builder.exact(name, root -> root.value(slot));
-                case "prefix" -> builder.prefix(name, root -> (String) root.value(slot));
-                default -> builder.range(name, root -> (Comparable) root.value(slot));
+                case "exact" -> builder.exact(name, root -> value(root, slot));
+                case "prefix" -> builder.prefix(name, root -> (String) value(root, slot));
+                default -> builder.range(name, root -> (Comparable) value(root, slot));
             }
         }
     }

@@ -66,7 +66,7 @@ final class SimulatedCluster {
             this.url = URI.create("http://" + id + ":8080");
             var register = registrations.apply(id);
             this.holder = new EngineHolder(() -> {
-                CacheEngine engine = new CacheEngine(null, mapper, 10, 100_000, 10_000,
+                CacheEngine engine = new CacheEngine(new io.github.dzdcache.json.JsonTypeFactory(mapper), mapper, 10, 100_000, 10_000,
                     properties.getRevisionRetention(), new java.time.Clock() {
                         @Override public java.time.ZoneId getZone() { return java.time.ZoneOffset.UTC; }
                         @Override public java.time.Clock withZone(java.time.ZoneId zone) { return this; }
@@ -84,6 +84,7 @@ final class SimulatedCluster {
                 @Override public void schedule(long delayMillis, Runnable task) {
                     at((long) Math.ceil(delayMillis / rate), () -> { if (alive) task.run(); });
                 }
+                @Override public void background(Runnable task) { schedule(1, task); }
             };
             PeerDirectory directory = () -> {
                 Map<String, URI> peers = new LinkedHashMap<>();
