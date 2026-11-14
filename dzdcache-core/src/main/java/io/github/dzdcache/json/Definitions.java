@@ -1,5 +1,7 @@
 package io.github.dzdcache.json;
 
+import io.github.zdcache.Split;
+import io.github.zdcache.TextStrategy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -30,6 +32,36 @@ public final class Definitions {
             throw invalid("Dimension names must be nonempty and unique");
         }
         if (dimension.index() == null) throw invalid("A dimension index is required");
+        TextStrategy[] strategies = strategies(dimension);
+        if (strategies.length > 0 && (!dimension.index().equalsIgnoreCase("prefix") || !dimension.parts().isEmpty() || segments(dimension.path()).contains("*")))
+            throw invalid("Strategies are only for a prefix dimension with a single value, not '" + dimension.name() + "'");
+    }
+
+    public static TextStrategy[] strategies(DimensionDefinition dimension) {
+        List<TextStrategy> strategies = new ArrayList<>();
+        for (JsonNode strategy : dimension.strategies()) {
+            if (strategy.isString() && strategy.asString().equalsIgnoreCase("contains")) strategies.add(TextStrategy.contains());
+            else if (strategy.isObject() && strategy.size() == 1 && strategy.path("split").isString()) strategies.add(TextStrategy.split(split(strategy.path("split").asString())));
+            else throw invalid("A strategy is \"contains\" or {\"split\": \"whitespace\" | \"non-alphanumeric\"}, not " + strategy);
+        }
+        return strategies.toArray(TextStrategy[]::new);
+    }
+
+    private static Split split(String name) {
+        return switch (name.toLowerCase(Locale.ROOT)) {
+            case "whitespace" -> Split.WHITESPACE;
+            case "non-alphanumeric" -> Split.NON_ALPHANUMERIC;
+            default -> throw invalid("A split is \"whitespace\" or \"non-alphanumeric\", not \"" + name + "\"");
+        };
+    }
+
+    public static List<String> describe(TextStrategy[] strategies) {
+        List<String> described = new ArrayList<>();
+        for (TextStrategy strategy : strategies) described.add(switch (strategy) {
+            case TextStrategy.Words words -> "split:" + words.split().name().toLowerCase(Locale.ROOT).replace('_', '-');
+            case TextStrategy.Contains ignored -> "contains";
+        });
+        return described.stream().sorted().distinct().toList();
     }
 
     public static void validateDefinition(SchemaDefinition definition) {
@@ -96,6 +128,8 @@ public final class Definitions {
             item.put("path", dimension.path());
             item.put("index", dimension.index().toLowerCase(Locale.ROOT));
             if (dimension.type() != null) item.put("type", dimension.type().toLowerCase(Locale.ROOT));
+            List<String> strategies = describe(strategies(dimension));
+            if (!strategies.isEmpty()) strategies.forEach(item.putArray("strategies")::add);
             if (!dimension.parts().isEmpty()) {
                 var parts = item.putArray("parts");
                 dimension.parts().forEach(part -> {

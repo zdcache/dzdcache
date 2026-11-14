@@ -118,4 +118,14 @@ public class JacksonRootTypeTest {
         assertThatThrownBy(() -> new JacksonRootType<>(Student.class, Long.class,
             SearchSpecification.builder(IdentityDimension.<Student, Long>explicit(Student.class)).build(), mapper)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test void textStrategiesAreDescribedSoNodesThatSplitOrSearchInsideDifferentlyDoNotShareTheType() {
+        var plain = type().describe("students", 1, 100, null);
+        var searched = new JacksonRootType<>(Student.class, Long.class,
+            specification().withStrategies(Student::name, io.github.zdcache.TextStrategy.split(), io.github.zdcache.TextStrategy.contains()), mapper)
+            .describe("students", 1, 100, null);
+        assertThat(plain.definition().toString()).doesNotContain("split").doesNotContain("contains");
+        assertThat(searched.definition().toString()).contains("\"split\":\"WHITESPACE\"").contains("\"contains\":true");
+        assertThat(searched.fingerprint()).isNotEqualTo(plain.fingerprint());
+    }
 }

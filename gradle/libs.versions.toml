@@ -10,7 +10,7 @@ maven-publish = "0.37.0"
 micrometer = "1.17.1"
 slf4j = "2.0.18"
 spring-boot = "4.1.1"
-zdcache = "0.3.1"
+zdcache = "0.4.0"
 
 [libraries]
 h2-ignite = { module = "com.h2database:h2", version.ref = "h2-ignite" }

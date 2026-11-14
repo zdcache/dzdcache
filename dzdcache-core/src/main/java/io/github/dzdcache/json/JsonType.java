@@ -117,7 +117,7 @@ public final class JsonType implements RootType<JsonRoot> {
             int slot = one(dimension);
             switch (index(dimension)) {
                 case "exact" -> builder.exact(name, root -> root.value(slot));
-                case "prefix" -> builder.prefix(name, root -> (String) root.value(slot));
+                case "prefix" -> builder.prefix(name, root -> (String) root.value(slot), Definitions.strategies(dimension));
                 default -> builder.range(name, root -> (Comparable) root.value(slot));
             }
         }

@@ -1,5 +1,7 @@
 package io.github.dzdcache.cache;
 
+import io.github.zdcache.Match;
+import io.github.zdcache.Ranked;
 import io.github.zdcache.SearchSpecification;
 import io.github.zdcache.ZDCache;
 import java.nio.ByteBuffer;
@@ -344,11 +346,34 @@ public final class CacheEngine {
 
     public Selection select(String specification, int version, String dimension, JsonNode value, JsonNode from, JsonNode to,
                             JsonNode filter, boolean scan) {
+        return select(specification, version, dimension, value, from, to, filter, scan, null, null);
+    }
+
+    public Selection select(String specification, int version, String dimension, JsonNode value, JsonNode from, JsonNode to,
+                            JsonNode filter, boolean scan, String match, Integer maxEdits) {
         Bucket bucket = bucket(specification, version);
         if (scan == (dimension != null)) throw new IllegalArgumentException(scan ? "A scan replaces 'dimension'; give one or the other" : "A dimension is required");
+        if (scan && match != null) throw new IllegalArgumentException("A scan takes no 'match'");
         RootType.Query query = scan ? null : bucket.type.query(dimension, value, from, to);
         Predicate<Object> predicate = filter == null || filter.isNull() ? null : Filter.parse(filter).compile(bucket.type.paths());
-        return new Selection(scan ? null : query.dimension(), scan ? null : query.values(), predicate, scan);
+        return new Selection(scan ? null : query.dimension(), scan ? null : matching(query.values(), match, maxEdits), predicate, scan);
+    }
+
+    static Object[] matching(Object[] values, String match, Integer maxEdits) {
+        if (match == null) {
+            if (maxEdits != null) throw new IllegalArgumentException("'maxEdits' is only for a fuzzy match");
+            return values;
+        }
+        String kind = match.toLowerCase(Locale.ROOT);
+        if (maxEdits != null && !kind.equals("fuzzy")) throw new IllegalArgumentException("'maxEdits' is only for a fuzzy match");
+        if (values.length != 1 || !(values[0] instanceof String text)) throw new IllegalArgumentException("A " + kind + " match needs one text value");
+        return new Object[] { switch (kind) {
+            case "prefix" -> Match.prefix(text);
+            case "words" -> Match.words(text);
+            case "contains" -> Match.contains(text);
+            case "fuzzy" -> maxEdits == null ? Match.fuzzy(text) : Match.fuzzy(text, maxEdits);
+            default -> throw new IllegalArgumentException("'match' is prefix, words, fuzzy or contains, not '" + match + "'");
+        } };
     }
 
     public long countJson(String specification, int version, Selection selection) {
@@ -413,6 +438,40 @@ public final class CacheEngine {
         return new Rendered(bytes.toByteArray(), roots.size());
     }
 
+    public Rendered searchRankedJson(String specification, int version, Selection selection, Integer limit, List<String> fields) {
+        if (selection.scan()) throw new IllegalArgumentException("A scan is not ranked; search a dimension instead");
+        Bucket bucket = bucket(specification, version);
+        int allowed = allowed(limit);
+        List<Ranked<Object>> found = new ArrayList<>();
+        for (Ranked<Object> ranked : bucket.cache.searchRanked(bucket.type.javaClass(), selection.dimension(), selection.values())) {
+            if (!accepted(bucket, ranked.result(), selection.filter())) continue;
+            if (found.size() == allowed) {
+                if (limit != null) break;
+                throw new CacheException(422, "Search matches more than " + maxSearchResults + " roots; narrow it or set a limit");
+            }
+            found.add(ranked);
+        }
+        var bytes = new java.io.ByteArrayOutputStream();
+        try (JsonGenerator out = mapper.createGenerator(bytes)) {
+            out.writeStartArray();
+            for (Ranked<Object> ranked : found) {
+                out.writeStartObject();
+                out.writeStringProperty("rankLevel", ranked.rankLevel().name());
+                out.writeName("value");
+                bucket.type.render(out, ranked.result(), fields);
+                out.writeEndObject();
+            }
+            out.writeEndArray();
+        }
+        return new Rendered(bytes.toByteArray(), found.size());
+    }
+
+    private int allowed(Integer limit) {
+        if (limit != null && (limit < 1 || limit > maxSearchResults))
+            throw new IllegalArgumentException("limit must be between 1 and " + maxSearchResults);
+        return limit == null ? maxSearchResults : limit;
+    }
+
     public List<JsonNode> search(String specification, int version, String dimension,
                                  JsonNode value, JsonNode from, JsonNode to) {
         return search(specification, version, dimension, value, from, to, null);
@@ -426,9 +485,7 @@ public final class CacheEngine {
     }
 
     private List<Object> matches(Bucket bucket, String dimension, Object[] values, Integer limit, Predicate<Object> filter, boolean scan) {
-        if (limit != null && (limit < 1 || limit > maxSearchResults))
-            throw new IllegalArgumentException("limit must be between 1 and " + maxSearchResults);
-        int allowed = limit == null ? maxSearchResults : limit;
+        int allowed = allowed(limit);
         List<Object> result = new ArrayList<>();
         for (Object root : hits(bucket, dimension, values, scan)) {
             if (!accepted(bucket, root, filter)) continue;

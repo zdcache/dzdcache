@@ -66,7 +66,8 @@ public class CacheController {
     public record IdentityRequest(String specification, int schemaVersion, JsonNode identity, List<String> fields) {}
     public record RemoveRequest(String specification, int schemaVersion, JsonNode identity, Long revision) {}
     public record SearchRequest(String specification, int schemaVersion, String dimension, JsonNode value, JsonNode from, JsonNode to,
-                                Integer limit, List<String> fields, JsonNode filter, Boolean count, String countBy, Boolean scan) {}
+                                Integer limit, List<String> fields, JsonNode filter, Boolean count, String countBy, Boolean scan,
+                                String match, Integer maxEdits, Boolean ranked) {}
 
     @PostMapping("/entries") public EntryMutation put(@RequestBody PutRequest request) {
         return mutate(EntryMutation.Operation.PUT, () -> cluster.put(java.util.Collections.singletonList(request)).getFirst());
@@ -102,13 +103,14 @@ public class CacheController {
         CacheEngine engine = engines.engine();
         boolean scan = Boolean.TRUE.equals(request.scan());
         CacheEngine.Selection selection = engine.select(request.specification(), request.schemaVersion(), request.dimension(), request.value(),
-            request.from(), request.to(), request.filter(), scan);
+            request.from(), request.to(), request.filter(), scan, request.match(), request.maxEdits());
+        boolean ranked = Boolean.TRUE.equals(request.ranked());
         String dimension = scan ? "(scan)" : request.dimension();
         String filtered = Boolean.toString(selection.filter() != null);
         byte[] body;
         int count;
         if (Boolean.TRUE.equals(request.count()) || request.countBy() != null) {
-            if (request.fields() != null || request.limit() != null) throw new IllegalArgumentException("'count' and 'countBy' take no 'fields' or 'limit'");
+            if (request.fields() != null || request.limit() != null || ranked) throw new IllegalArgumentException("'count' and 'countBy' take no 'fields', 'limit' or 'ranked'");
             if (request.countBy() != null) {
                 java.util.Map<Object, Long> counts = engine.countByJson(request.specification(), request.schemaVersion(), selection, request.countBy());
                 java.util.Map<String, Long> named = new java.util.LinkedHashMap<>();
@@ -121,7 +123,9 @@ public class CacheController {
                 count = 1;
             }
         } else {
-            CacheEngine.Rendered found = engine.searchJson(request.specification(), request.schemaVersion(), selection, request.limit(), request.fields());
+            CacheEngine.Rendered found = ranked
+                ? engine.searchRankedJson(request.specification(), request.schemaVersion(), selection, request.limit(), request.fields())
+                : engine.searchJson(request.specification(), request.schemaVersion(), selection, request.limit(), request.fields());
             body = found.json();
             count = found.count();
         }
